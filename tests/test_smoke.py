@@ -18,7 +18,8 @@ def test_base_config_validates() -> None:
     cfg = load_config()
     assert cfg.area == "SE"
     assert 0 < cfg.reservoir.availability <= 1
-    assert cfg.period.start < cfg.period.end
+    assert cfg.period.first_iso_year <= cfg.period.last_iso_year
+    assert cfg.data.country in cfg.data.areas
 
 
 def test_cli_help_lists_commands() -> None:

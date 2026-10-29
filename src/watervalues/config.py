@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from watervalues.data.schema import KNOWN_PSR_TYPES
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "base.yaml"
+DATASETS = ("generation", "load", "price", "reservoir")
 
 
 class _Section(BaseModel):
@@ -19,15 +23,15 @@ class _Section(BaseModel):
 
 
 class PeriodConfig(_Section):
-    """Historical period used for calibration and scenarios."""
+    """Historical period used for calibration and scenarios, in ISO years."""
 
-    start: date
-    end: date
+    first_iso_year: int
+    last_iso_year: int
 
     @model_validator(mode="after")
     def _check_order(self) -> PeriodConfig:
-        if self.end <= self.start:
-            raise ValueError("period.end must be after period.start")
+        if self.last_iso_year < self.first_iso_year:
+            raise ValueError("period.last_iso_year must not be before first_iso_year")
         return self
 
 
@@ -69,6 +73,77 @@ class ScenariosConfig(_Section):
     de_price_levels_eur_mwh: tuple[float, ...]
 
 
+class AreaSpec(_Section):
+    """An ENTSO-E area: EIC code and the AreaTypeCode used in the bulk exports."""
+
+    eic: str
+    area_type: str | None = None  # None until checked against the exports
+
+
+class DePriceConfig(_Section):
+    """German price series across the 2018 bidding-zone split."""
+
+    before: str
+    after: str
+    switch_utc: datetime
+
+    @model_validator(mode="after")
+    def _check_timezone(self) -> DePriceConfig:
+        if self.switch_utc.tzinfo is None:
+            raise ValueError("data.de_price.switch_utc must include a time zone")
+        return self
+
+
+class FileLibConfig(_Section):
+    """ENTSO-E File Library access (website login, no API token)."""
+
+    keyring_service: str
+    token_url: str
+    client_id: str
+    timeout_s: float = Field(gt=0)
+    max_requests_per_minute: int = Field(gt=0, le=100)
+    max_retries: int = Field(ge=0)
+    backoff_s: float = Field(ge=0)
+    folders: dict[str, str]
+
+    @model_validator(mode="after")
+    def _check_folders(self) -> FileLibConfig:
+        if set(self.folders) != set(DATASETS):
+            raise ValueError(f"data.filelib.folders must define exactly {DATASETS}")
+        return self
+
+
+class DataConfig(_Section):
+    """Data sources, areas and weekly aggregation rules."""
+
+    source: Literal["filelib", "entsoe_api"]
+    raw_dir: Path
+    weekly_csv: Path
+    known_gaps_file: Path
+    min_coverage: float = Field(gt=0, le=1)
+    csv_float_format: str
+    country: str
+    price_zones: tuple[str, ...]
+    areas: dict[str, AreaSpec]
+    de_price: DePriceConfig
+    generation_categories: dict[str, tuple[str, ...]]
+    filelib: FileLibConfig
+
+    @model_validator(mode="after")
+    def _check_references(self) -> DataConfig:
+        named = {self.country, *self.price_zones, self.de_price.before, self.de_price.after}
+        missing = sorted(named - set(self.areas))
+        if missing:
+            raise ValueError(f"areas used but not defined in data.areas: {missing}")
+        codes = [code for codes in self.generation_categories.values() for code in codes]
+        unknown = sorted(set(codes) - set(KNOWN_PSR_TYPES))
+        if unknown:
+            raise ValueError(f"unknown production types in generation_categories: {unknown}")
+        if len(codes) != len(set(codes)):
+            raise ValueError("a production type appears in more than one generation category")
+        return self
+
+
 class AppConfig(_Section):
     """Full model configuration."""
 
@@ -79,6 +154,7 @@ class AppConfig(_Section):
     sdp: SdpConfig
     simulation: SimulationConfig
     scenarios: ScenariosConfig
+    data: DataConfig
 
 
 def load_config(path: Path | None = None) -> AppConfig:

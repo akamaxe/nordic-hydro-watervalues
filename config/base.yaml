@@ -1,7 +1,7 @@
 area: SE
-period:
-  start: "2015-01-01"
-  end: "2025-12-31"
+period:                       # ISO years (weeks run Monday-Monday in UTC)
+  first_iso_year: 2015
+  last_iso_year: 2025
 
 reservoir:
   capacity_gwh: null          # null -> use the maximum observed historical storage
@@ -25,3 +25,43 @@ simulation:
 
 scenarios:
   de_price_levels_eur_mwh: [50, 80, 120]
+
+data:
+  source: filelib             # filelib (website login) | entsoe_api (REST API token)
+  raw_dir: data/raw
+  weekly_csv: data/processed/weekly_se.csv
+  known_gaps_file: data/known_gaps.yaml
+  min_coverage: 0.95          # share of a week's hours with data; below it the week is NaN
+  csv_float_format: "%.3f"
+  country: SE
+  price_zones: [SE1, SE2, SE3, SE4]
+  areas:                      # EIC code and, once checked in the exports, the AreaTypeCode
+    SE: {eic: "10YSE-1--------K", area_type: null}
+    SE1: {eic: "10Y1001A1001A44P", area_type: null}
+    SE2: {eic: "10Y1001A1001A45N", area_type: null}
+    SE3: {eic: "10Y1001A1001A46L", area_type: null}
+    SE4: {eic: "10Y1001A1001A47J", area_type: null}
+    DE_LU: {eic: "10Y1001A1001A82H", area_type: null}
+    DE_AT_LU: {eic: "10Y1001A1001A63L", area_type: null}
+  de_price:                   # German day-ahead price: bidding-zone split on 2018-10-01
+    before: DE_AT_LU
+    after: DE_LU
+    switch_utc: "2018-09-30T22:00:00Z"
+  generation_categories:      # ENTSO-E production types (PSR codes); the rest is "other"
+    hydro: [B10, B11, B12]
+    nuclear: [B14]
+    wind: [B18, B19]
+    solar: [B16]
+  filelib:
+    keyring_service: nordic-hydro-watervalues/entsoe-tp
+    token_url: https://keycloak.tp.entsoe.eu/realms/tp/protocol/openid-connect/token
+    client_id: tp-fms-public
+    timeout_s: 300
+    max_requests_per_minute: 30   # the File Library allows 100; HTTP 429 bans for 10 minutes
+    max_retries: 4
+    backoff_s: 5
+    folders:
+      generation: AggregatedGenerationPerType_16.1.B_C_r3
+      load: ActualTotalLoad_6.1.A_r3
+      price: EnergyPrices_12.1.D_r3.1
+      reservoir: AggregatedFillingRateOfWaterReservoirsAndHydroStoragePlants_16.1.D_r3
