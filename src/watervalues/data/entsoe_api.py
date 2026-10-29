@@ -15,8 +15,9 @@ import itertools
 import logging
 import os
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -34,19 +35,50 @@ from watervalues.data.schema import psr_code
 SOURCE = "entsoe_api"
 API_KEY_ENV = "ENTSOE_API_KEY"
 _HALF_DAY = pd.Timedelta(hours=12)
+WEEK_SPAN = pd.Timedelta(days=7)
 _REPORT_TZ = "Europe/Stockholm"  # reservoir weeks are published in Swedish local time
 _GENERATION, _CONSUMPTION = "Actual Aggregated", "Actual Consumption"
 
 
 class ApiClient(Protocol):
-    """The part of :class:`entsoe.EntsoePandasClient` used here (keyword-only start/end)."""
+    """Queries used here (keyword-only start/end), implemented by :class:`EntsoeApi`."""
 
-    def query_generation(self, country_code, *, start, end, **kwargs) -> pd.DataFrame: ...  # noqa: D102
+    def query_generation(self, country_code, *, start, end) -> pd.DataFrame: ...  # noqa: D102
     def query_load(self, country_code, *, start, end) -> pd.DataFrame: ...  # noqa: D102
     def query_day_ahead_prices(self, country_code, *, start, end) -> pd.Series: ...  # noqa: D102
-    def query_aggregate_water_reservoirs_and_hydro_storage(  # noqa: D102
-        self, country_code, *, start, end
-    ) -> pd.Series: ...
+    def reservoir_xml(self, country_code, *, start, end) -> str: ...  # noqa: D102
+
+
+class EntsoeApi:
+    """Thin wrapper around :class:`entsoe.EntsoePandasClient`.
+
+    Reservoir values are requested as raw XML and parsed by :func:`parse_reservoir_xml`:
+    entsoe-py 0.8.1 steps weekly points in fixed UTC intervals and drops the last week of a
+    period that starts and ends in different daylight-saving regimes.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def query_generation(self, country_code, *, start, end) -> pd.DataFrame:
+        """Actual generation per production type (entsoe-py, monthly requests)."""
+        return self._client.query_generation(country_code, start=start, end=end)
+
+    def query_load(self, country_code, *, start, end) -> pd.DataFrame:
+        """Actual total load (entsoe-py, monthly requests)."""
+        return self._client.query_load(country_code, start=start, end=end)
+
+    def query_day_ahead_prices(self, country_code, *, start, end) -> pd.Series:
+        """Day-ahead (SDAC) prices (entsoe-py)."""
+        return self._client.query_day_ahead_prices(country_code, start=start, end=end)
+
+    def reservoir_xml(self, country_code, *, start, end) -> str:
+        """Raw A72 document of weekly reservoir filling (at most one year per request)."""
+        from entsoe import EntsoeRawClient
+
+        return EntsoeRawClient.query_aggregate_water_reservoirs_and_hydro_storage(
+            self._client, country_code, start=start, end=end
+        )
 
 
 class ApiError(RuntimeError):
@@ -76,14 +108,17 @@ def redact(text: str, secret: str) -> str:
     return text.replace(secret, "***") if secret else text
 
 
-def make_api_client(api_key: str, retry_count: int, retry_delay_s: float, timeout_s: float):
-    """Create an :class:`entsoe.EntsoePandasClient` with quiet logging."""
+def make_api_client(
+    api_key: str, retry_count: int, retry_delay_s: float, timeout_s: float
+) -> EntsoeApi:
+    """Create the API client (entsoe-py underneath) with quiet logging."""
     from entsoe import EntsoePandasClient
 
     logging.getLogger("entsoe").setLevel(logging.WARNING)
-    return EntsoePandasClient(
+    client = EntsoePandasClient(
         api_key=api_key, retry_count=retry_count, retry_delay=retry_delay_s, timeout=timeout_s
     )
+    return EntsoeApi(client)
 
 
 def infer_resolution_min(index: pd.DatetimeIndex) -> np.ndarray:
@@ -169,25 +204,49 @@ def normalise_series(obj: pd.Series | pd.DataFrame, value_column: str) -> pd.Dat
     )
 
 
-def normalise_reservoir(series: pd.Series) -> pd.DataFrame:
-    """Map weekly reservoir values to ISO week labels.
+def _local_monday(instant: pd.Timestamp) -> date:
+    """Local calendar Monday of a week-start instant (robust to a one-hour DST offset)."""
+    day = (instant.tz_convert(_REPORT_TZ) + _HALF_DAY).normalize()
+    if day.day_of_week != 0:
+        raise ValueError(f"weekly period does not start on a Monday: {instant}")
+    return day.date()
 
-    Each week starts on Monday 00:00 Swedish time; entsoe-py steps fixed 7-day intervals in UTC,
-    which can drift by an hour across daylight-saving changes, so the label is taken from the
-    nearest local day.
+
+def parse_reservoir_xml(xml_text: str) -> pd.DataFrame:
+    """Weekly reservoir values of an A72 (16.1.D) API document, labelled by ISO week.
+
+    Weeks are counted in calendar days from each period's first local Monday, so a period that
+    crosses a daylight-saving change keeps all its weeks. With curve type A03, positions whose
+    value repeats are omitted by the sender; they are forward-filled within the period.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``iso_year``, ``iso_week`` and ``stored_mwh`` [MWh].
     """
-    local = _utc_index(series).tz_convert(_REPORT_TZ)
-    days = (local + _HALF_DAY).normalize()
-    if (days.day_of_week != 0).any():
-        raise ValueError("reservoir values do not start on Mondays")
-    iso = [date(d.year, d.month, d.day).isocalendar() for d in days]
-    return pd.DataFrame(
-        {
-            "iso_year": [i.year for i in iso],
-            "iso_week": [i.week for i in iso],
-            "stored_mwh": series.to_numpy(dtype=float),
-        }
-    )
+    rows = []
+    for series in ET.fromstring(xml_text).iterfind(".//{*}TimeSeries"):
+        curve = series.findtext("{*}curveType", default="A01")
+        for period in series.iterfind("{*}Period"):
+            if period.findtext("{*}resolution") != "P7D":
+                raise ValueError("reservoir periods must have weekly (P7D) resolution")
+            start = pd.Timestamp(period.findtext("{*}timeInterval/{*}start"))
+            end = pd.Timestamp(period.findtext("{*}timeInterval/{*}end"))
+            weeks = round((end - start) / WEEK_SPAN)  # 7 days, give or take a DST hour
+            values = {
+                int(point.findtext("{*}position")): float(point.findtext("{*}quantity"))
+                for point in period.iterfind("{*}Point")
+            }
+            monday = _local_monday(start)
+            current = None
+            for position in range(1, weeks + 1):
+                if position in values:
+                    current = values[position]
+                elif curve != "A03" or current is None:
+                    continue
+                iso = (monday + timedelta(weeks=position - 1)).isocalendar()
+                rows.append((iso.year, iso.week, current))
+    return pd.DataFrame(rows, columns=["iso_year", "iso_week", "stored_mwh"])
 
 
 def api_areas(data: DataConfig, dataset: str) -> list[str]:
@@ -210,7 +269,7 @@ def _windows(cfg: AppConfig, dataset: str) -> list[tuple[pd.Timestamp, pd.Timest
 
 
 def _query(
-    client: ApiClient, dataset: str, eic: str, start: pd.Timestamp, end: pd.Timestamp, overlap
+    client: ApiClient, dataset: str, eic: str, start: pd.Timestamp, end: pd.Timestamp
 ) -> pd.DataFrame:
     """One API request, normalised (raises entsoe's NoMatchingDataError when empty)."""
     if dataset == "generation":
@@ -220,11 +279,7 @@ def _query(
     if dataset == "price":
         prices = client.query_day_ahead_prices(eic, start=start, end=end)
         return normalise_series(prices, "price_eur_mwh").assign(sequence="")
-    # Overlapping windows: entsoe-py 0.8.1 drops the weeks at its yearly block boundaries.
-    series = client.query_aggregate_water_reservoirs_and_hydro_storage(
-        eic, start=start - overlap, end=end + overlap
-    )
-    return normalise_reservoir(series)
+    return parse_reservoir_xml(client.reservoir_xml(eic, start=start, end=end))
 
 
 def fetch_api(
@@ -276,14 +331,11 @@ def fetch_api(
             api_key, settings.retry_count, settings.retry_delay_s, settings.timeout_s
         )
     limiter = RateLimiter(0.0)
-    overlap = pd.Timedelta(days=settings.reservoir_overlap_days)
 
     def request(dataset: str, area: str, start: pd.Timestamp, end: pd.Timestamp):
         try:
             return call_with_retries(
-                functools.partial(
-                    _query, client, dataset, data.areas[area].eic, start, end, overlap
-                ),
+                functools.partial(_query, client, dataset, data.areas[area].eic, start, end),
                 limiter,
                 settings.max_retries,
                 settings.backoff_s,

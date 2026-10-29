@@ -85,7 +85,6 @@ data:
     timeout_s: 120
     max_retries: 4            # our retries on timeouts and server errors (exponential backoff)
     backoff_s: 15
-    reservoir_overlap_days: 21    # overlapping windows: entsoe-py 0.8.1 drops year-boundary weeks
   filelib:
     keyring_service: nordic-hydro-watervalues/entsoe-tp
     token_url: https://keycloak.tp.entsoe.eu/realms/tp/protocol/openid-connect/token

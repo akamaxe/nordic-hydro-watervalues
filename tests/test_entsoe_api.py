@@ -19,8 +19,8 @@ from watervalues.data.entsoe_api import (
     get_api_key,
     infer_resolution_min,
     normalise_generation,
-    normalise_reservoir,
     normalise_series,
+    parse_reservoir_xml,
 )
 from watervalues.data.filelib import CredentialsError
 
@@ -66,21 +66,51 @@ def test_series_normalisation_converts_to_utc() -> None:
     assert out["value_mw"].tolist() == [1.0, 2.0]
 
 
-def test_reservoir_labels_survive_dst_drift() -> None:
-    index = pd.DatetimeIndex(
-        [
-            "2026-10-11 22:00",  # Monday 2026-10-12 00:00 CEST -> 2026-W42
-            "2026-10-18 22:00",  # Monday 00:00 CEST -> W43
-            "2026-10-25 22:00",  # 7 days later in UTC = Sunday 23:00 CET (drift) -> still W44
-        ],
-        tz="UTC",
+def a72(periods, curve="A03", resolution="P7D") -> str:
+    """Minimal A72 document; ``periods`` = [(start, end, [(position, quantity), ...]), ...]."""
+    series = "".join(
+        f"<TimeSeries><curveType>{curve}</curveType><Period><timeInterval><start>{s}</start>"
+        f"<end>{e}</end></timeInterval><resolution>{resolution}</resolution>"
+        + "".join(
+            f"<Point><position>{p}</position><quantity>{q}</quantity></Point>" for p, q in points
+        )
+        + "</Period></TimeSeries>"
+        for s, e, points in periods
     )
-    out = normalise_reservoir(pd.Series([1.0, 2.0, 3.0], index=index))
-    assert list(zip(out["iso_year"], out["iso_week"], strict=True)) == [
-        (2026, 42),
-        (2026, 43),
-        (2026, 44),
-    ]
+    namespace = "urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0"
+    return (
+        f'<?xml version="1.0"?><GL_MarketDocument xmlns="{namespace}">{series}</GL_MarketDocument>'
+    )
+
+
+def labels(frame) -> list[tuple[int, int]]:
+    return list(zip(frame["iso_year"], frame["iso_week"], strict=True))
+
+
+def test_reservoir_period_crossing_dst_keeps_its_last_week() -> None:
+    # As served for Sweden in 2016: a period starting in winter (Monday 00:00 CET) and ending
+    # in summer (Monday 00:00 CEST) right before a missing week. entsoe-py 0.8.1 loses its last
+    # week (2016-W38); counting calendar weeks from the local Monday keeps it.
+    start, end = "2015-12-27T23:00Z", "2016-09-25T22:00Z"
+    points = [(p, 1000.0 * p) for p in range(1, 40)]
+    out = parse_reservoir_xml(a72([(start, end, points)]))
+    assert labels(out)[0] == (2015, 53)
+    assert labels(out)[-1] == (2016, 38)
+    assert out["stored_mwh"].iloc[-1] == 39_000.0
+
+
+def test_reservoir_a03_omitted_positions_repeat_the_last_value() -> None:
+    xml = a72([("2026-10-04T22:00Z", "2026-10-25T22:00Z", [(1, 5.0), (3, 7.0)])])
+    out = parse_reservoir_xml(xml)
+    assert labels(out) == [(2026, 41), (2026, 42), (2026, 43)]
+    assert out["stored_mwh"].tolist() == [5.0, 5.0, 7.0]
+
+
+def test_reservoir_requires_weekly_resolution() -> None:
+    with pytest.raises(ValueError, match="P7D"):
+        parse_reservoir_xml(
+            a72([("2026-10-04T22:00Z", "2026-10-11T22:00Z", [(1, 1.0)])], resolution="P1D")
+        )
 
 
 class FakeApi:
@@ -110,12 +140,20 @@ class FakeApi:
         self.calls.append(("price", start, end))
         return pd.Series(40.0, index=self._index(start, end, "h"))
 
-    def query_aggregate_water_reservoirs_and_hydro_storage(self, country_code, *, start, end):
+    def reservoir_xml(self, country_code, *, start, end):
         self.calls.append(("reservoir", start, end))
-        mondays = pd.date_range(start.ceil("D"), end, freq="W-MON", tz="UTC")
-        local_midnight = mondays.tz_convert(None).tz_localize("Europe/Stockholm").tz_convert("UTC")
-        values = 20_000_000.0 + np.arange(len(local_midnight))
-        return pd.Series(values, index=local_midnight)
+        if end <= pd.Timestamp("2015-01-01", tz="UTC"):
+            raise NoMatchingDataError
+        local = pd.date_range(start.tz_convert(None), end.tz_convert(None), freq="W-MON")
+        mondays = local.tz_localize("Europe/Stockholm").tz_convert("UTC")
+        period_end = (
+            (local[-1] + pd.Timedelta(days=7)).tz_localize("Europe/Stockholm").tz_convert("UTC")
+        )
+        points = [(i + 1, 20_000_000.0 + i) for i in range(len(mondays))]
+        return a72(
+            [(f"{mondays[0]:%Y-%m-%dT%H:%MZ}", f"{period_end:%Y-%m-%dT%H:%MZ}", points)],
+            curve="A01",
+        )
 
 
 @pytest.fixture

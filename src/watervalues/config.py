@@ -142,7 +142,6 @@ class ApiConfig(_Section):
     timeout_s: float = Field(gt=0)
     max_retries: int = Field(ge=0)
     backoff_s: float = Field(ge=0)
-    reservoir_overlap_days: int = Field(ge=0)
 
 
 class FileLibConfig(_Section):
