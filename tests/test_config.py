@@ -57,3 +57,10 @@ def test_iso_period_order(raw: dict) -> None:
     bad["period"] = {"first_iso_year": 2025, "last_iso_year": 2015}
     with pytest.raises(ValidationError, match="last_iso_year"):
         AppConfig.model_validate(bad)
+
+
+def test_inflow_noise_band_must_be_positive(raw: dict) -> None:
+    bad = copy.deepcopy(raw)
+    bad["inflow"]["negative_noise_gwh"] = -1
+    with pytest.raises(ValidationError, match="negative_noise_gwh"):
+        AppConfig.model_validate(bad)

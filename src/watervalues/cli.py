@@ -155,6 +155,26 @@ def validate(
 
 
 @app.command()
+def inflow(config: ConfigOption = None) -> None:
+    """Reconstruct weekly inflows and the scenario matrix from weekly_se.csv (into outputs/)."""
+    from watervalues.config import PROJECT_ROOT
+    from watervalues.data.build import load_weekly
+    from watervalues.inflow import InflowError, build_inflow, write_outputs
+
+    cfg = load_config(config)
+    try:
+        result = build_inflow(cfg, load_weekly(PROJECT_ROOT / cfg.data.weekly_csv))
+    except InflowError as exc:
+        typer.echo(f"Inflow stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    for line in result.report:
+        typer.echo(line)
+    write_outputs(cfg, result)
+    paths = cfg.inflow
+    typer.echo(f"\nWrote {paths.weekly_csv}, {paths.scenarios_csv} and {paths.report}")
+
+
+@app.command()
 def notebooks() -> None:
     """Execute every notebook in notebooks/ in order, in place, so outputs are up to date."""
     import nbformat

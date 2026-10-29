@@ -26,6 +26,16 @@ simulation:
 scenarios:
   de_price_levels_eur_mwh: [50, 80, 120]
 
+inflow:                       # I = storage_end - storage + hydro (spill not observed: assumed 0)
+  # Negative weekly inflow down to -negative_noise_gwh is storage-reporting noise: it is clipped
+  # to 0 and listed. About twice the 76 GWh/week winter RMSE of the implied inflow against
+  # Energiföretagen's published inflow (data/processed/validation_energiforetagen.txt).
+  # A larger negative stops `watervalues inflow`.
+  negative_noise_gwh: 150
+  weekly_csv: outputs/inflow_weekly.csv       # balance, stage inflow and status of every week
+  scenarios_csv: outputs/inflow_scenarios.csv # ISO years x 52 stages [GWh per 168-h stage]
+  report: outputs/inflow_report.txt
+
 data:
   source: entsoe_api          # entsoe_api (REST API token) | filelib (website login)
   raw_dir: data/raw

@@ -16,6 +16,13 @@ uv sync
 uv run pytest
 ```
 
+## Notebooks
+
+1. [Data overview](notebooks/01_data_overview.ipynb): the weekly dataset and how the reservoir
+   timestamp convention was verified.
+2. [Inflow reconstruction](notebooks/02_inflow_reconstruction.ipynb): weekly inflows from the
+   reservoir energy balance, dry and wet years, and the inflow scenarios of the model.
+
 ## Data
 
 Source: ENTSO-E Transparency Platform. See [data/README.md](data/README.md) for provenance,

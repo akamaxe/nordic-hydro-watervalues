@@ -73,6 +73,15 @@ class ScenariosConfig(_Section):
     de_price_levels_eur_mwh: tuple[float, ...]
 
 
+class InflowConfig(_Section):
+    """Inflow reconstruction from the reservoir energy balance, and its outputs."""
+
+    negative_noise_gwh: float = Field(gt=0)  # negatives down to -this are clipped to 0 [GWh]
+    weekly_csv: Path
+    scenarios_csv: Path
+    report: Path
+
+
 class AreaSpec(_Section):
     """An ENTSO-E area: EIC code and the AreaTypeCode used in the bulk exports."""
 
@@ -229,6 +238,7 @@ class AppConfig(_Section):
     sdp: SdpConfig
     simulation: SimulationConfig
     scenarios: ScenariosConfig
+    inflow: InflowConfig
     data: DataConfig
 
 

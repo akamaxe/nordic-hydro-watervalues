@@ -167,8 +167,16 @@ two-hour offset that is negligible at weekly resolution.
 
 Missing values in `weekly_se.csv` are listed with their reason in `known_gaps.yaml`;
 `watervalues build --strict` fails on any missing value that is not documented there. Nothing is
-imputed in the weekly dataset; how the model treats these weeks is decided with the inflow
-reconstruction (M2).
+imputed in the weekly dataset.
+
+How the model treats them:
+
+* **2015-W01 and 2015-W50** lack hydro production, so their inflow cannot be reconstructed
+  (their storage is known). In the inflow scenarios only (`watervalues inflow`, notebook 02),
+  each gets the mean inflow of the same ISO week in the other years and is flagged `imputed`,
+  which keeps 2015 as one of the eleven inflow scenarios.
+* **2021-W50 and 2022-W06** miss only solar or "other" generation. They do not affect the inflow;
+  they matter for residual demand in the price model (M3).
 
 | Weeks | Missing columns | Reason |
 |---|---|---|
