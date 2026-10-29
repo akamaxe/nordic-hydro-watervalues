@@ -48,9 +48,8 @@ from watervalues.data.schema import (
     PUMPED_STORAGE_PSR,
     WEEKLY_COLUMNS,
 )
-from watervalues.units import HOURS_PER_WEEK, MWH_PER_GWH
+from watervalues.units import GWH_PER_TWH, HOURS_PER_WEEK, MWH_PER_GWH
 
-GWH_PER_TWH = MWH_PER_GWH  # 1 TWh = 1000 GWh
 _PRICE_TOL_EUR_MWH = 1e-6  # numerical tolerance of the price bound check
 
 

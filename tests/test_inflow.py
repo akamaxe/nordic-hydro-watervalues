@@ -7,7 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from watervalues.cli import app
-from watervalues.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
+from watervalues.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, PeriodConfig, load_config
 from watervalues.data.build import load_known_gaps, load_weekly, week_label, write_weekly_csv
 from watervalues.data.calendar import week_calendar
 from watervalues.data.schema import WEEKLY_COLUMNS
@@ -18,6 +18,7 @@ from watervalues.inflow import (
     climatology,
     dry_and_wet,
     fill_gaps,
+    load_scenarios,
     reconstruct,
     scenario_matrix,
 )
@@ -26,6 +27,9 @@ from watervalues.units import HOURS_PER_WEEK, MODEL_WEEKS_PER_YEAR
 CFG = load_config()
 NOISE_GWH = CFG.inflow.negative_noise_gwh
 FIRST, LAST = 2019, 2021  # 2020 has an ISO week 53, folded into week 52 (336 h)
+SYNTHETIC_CFG = CFG.model_copy(
+    update={"period": PeriodConfig(first_iso_year=FIRST, last_iso_year=LAST)}
+)
 STORAGE0_GWH = 20_000.0
 
 
@@ -50,6 +54,10 @@ def synthetic_weekly(inflow_gwh: np.ndarray, hydro_gwh: np.ndarray) -> pd.DataFr
     return pd.DataFrame(columns)[list(WEEKLY_COLUMNS)]
 
 
+def week_mask(cal: pd.DataFrame, iso_year: int, iso_week: int) -> np.ndarray:
+    return ((cal["iso_year"] == iso_year) & (cal["iso_week"] == iso_week)).to_numpy()
+
+
 @pytest.fixture
 def flows() -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     cal = week_calendar(FIRST, LAST)
@@ -63,24 +71,25 @@ def test_synthetic_inflow_is_recovered_exactly(flows) -> None:
     cal, inflow, hydro = flows
     out = reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)
     np.testing.assert_array_equal(out["balance_gwh"], inflow)
-    np.testing.assert_array_equal(out["inflow_gwh"], inflow * HOURS_PER_WEEK / cal["hours"])
+    np.testing.assert_array_equal(out["inflow_stage_gwh"], inflow * HOURS_PER_WEEK / cal["hours"])
     assert (out["status"] == "observed").all()
     # The folded week: the balance spans 336 hours and is halved only afterwards.
     folded = (cal["hours"] == 2 * HOURS_PER_WEEK).to_numpy()
     assert folded.sum() == 1
-    np.testing.assert_array_equal(out.loc[folded, "inflow_gwh"], inflow[folded] / 2)
+    np.testing.assert_array_equal(out.loc[folded, "inflow_stage_gwh"], inflow[folded] / 2)
 
 
-def test_small_negative_is_clipped_and_listed(flows) -> None:
+def test_small_negatives_are_clipped_and_listed(flows) -> None:
     _, inflow, hydro = flows
     inflow[10] = -40.0  # 2019-W11
+    inflow[20] = -NOISE_GWH  # 2019-W21: the edge of the band is still noise
     out = reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)
     assert out.loc[10, "balance_gwh"] == -40.0  # the measured balance is kept
-    assert out.loc[10, "inflow_gwh"] == 0.0
-    assert out["status"].tolist().count("clipped") == 1
-    assert out.loc[10, "status"] == "clipped"
-    report = "\n".join(build_inflow(CFG, synthetic_weekly(inflow, hydro)).report)
+    assert out.loc[[10, 20], "inflow_stage_gwh"].tolist() == [0.0, 0.0]
+    assert out.index[out["status"] == "clipped"].tolist() == [10, 20]
+    report = "\n".join(build_inflow(SYNTHETIC_CFG, synthetic_weekly(inflow, hydro)).report)
     assert "2019-W11" in report
+    assert "2019-W21" in report
 
 
 def test_negative_beyond_the_noise_band_stops(flows) -> None:
@@ -90,19 +99,43 @@ def test_negative_beyond_the_noise_band_stops(flows) -> None:
         reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)
 
 
-def test_gap_week_gets_the_mean_of_the_same_iso_week(flows) -> None:
+def test_noise_band_applies_before_scaling(flows) -> None:
     cal, inflow, hydro = flows
+    folded = (cal["hours"] == 2 * HOURS_PER_WEEK).to_numpy()
+    inflow[folded] = -(NOISE_GWH + 50.0)  # beyond the band over 336 h, inside it per stage
+    with pytest.raises(InflowError, match="2020-W52"):
+        reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)
+
+
+def test_gap_week_gets_the_mean_of_the_clipped_stage_inflow(flows) -> None:
+    cal, inflow, hydro = flows
+    gap, folded, clipped = (week_mask(cal, year, 52) for year in (2019, 2020, 2021))
+    inflow[clipped] = -40.0
     weekly = synthetic_weekly(inflow, hydro)
-    gap = ((weekly["iso_year"] == 2020) & (weekly["iso_week"] == 10)).to_numpy()
     weekly.loc[gap, "hydro_gwh"] = np.nan
-    complete = reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)
-    filled = fill_gaps(reconstruct(weekly, NOISE_GWH))
-    same_week = (cal["iso_week"] == 10).to_numpy() & ~gap
-    assert filled.loc[gap, "inflow_gwh"].item() == pytest.approx(inflow[same_week].mean())
+    reconstructed = reconstruct(weekly, NOISE_GWH)
+    assert reconstructed.loc[gap, "status"].item() == "missing"
+    filled = fill_gaps(reconstructed)
+    # The same week of the other years per 168-hour stage: half the folded 2020-W52, and
+    # 2021-W52 clipped to zero. Averaging the raw balances would give a different value.
+    expected = (inflow[folded].item() / 2 + 0.0) / 2
+    assert filled.loc[gap, "inflow_stage_gwh"].item() == pytest.approx(expected)
+    assert expected != pytest.approx((inflow[folded].item() + inflow[clipped].item()) / 2)
     assert filled.loc[gap, "status"].item() == "imputed"
     assert np.isnan(filled.loc[gap, "balance_gwh"].item())  # nothing measured is invented
-    np.testing.assert_array_equal(filled.loc[~gap, "inflow_gwh"], complete.loc[~gap, "inflow_gwh"])
-    assert (filled.loc[~gap, "status"] == "observed").all()
+    others = ~gap
+    np.testing.assert_array_equal(
+        filled.loc[others, "inflow_stage_gwh"], reconstructed.loc[others, "inflow_stage_gwh"]
+    )
+    assert (filled.loc[others, "status"] == reconstructed.loc[others, "status"]).all()
+
+
+def test_only_weeks_without_production_are_imputed(flows) -> None:
+    _, inflow, hydro = flows
+    weekly = synthetic_weekly(inflow, hydro)
+    weekly.loc[30, "storage_end_gwh"] = np.nan  # 2019-W31: production known, storage not
+    with pytest.raises(InflowError, match="2019-W31"):
+        fill_gaps(reconstruct(weekly, NOISE_GWH))
 
 
 def test_scenario_matrix_is_years_by_stages(flows) -> None:
@@ -112,7 +145,7 @@ def test_scenario_matrix_is_years_by_stages(flows) -> None:
     assert matrix.shape == (LAST - FIRST + 1, MODEL_WEEKS_PER_YEAR)
     assert matrix.index.tolist() == list(range(FIRST, LAST + 1))
     assert matrix.columns.tolist() == list(range(1, MODEL_WEEKS_PER_YEAR + 1))
-    np.testing.assert_array_equal(matrix.to_numpy().ravel(), out["inflow_gwh"].to_numpy())
+    np.testing.assert_array_equal(matrix.to_numpy().ravel(), out["inflow_stage_gwh"].to_numpy())
 
 
 def test_scenario_matrix_rejects_incomplete_years(flows) -> None:
@@ -121,9 +154,20 @@ def test_scenario_matrix_rejects_incomplete_years(flows) -> None:
     with pytest.raises(InflowError, match="2020"):
         scenario_matrix(out.drop(index=60))  # 2020 loses a week
     missing = out.copy()
-    missing.loc[5, "inflow_gwh"] = np.nan
+    missing.loc[5, "inflow_stage_gwh"] = np.nan
     with pytest.raises(InflowError, match="2019-W06"):
         scenario_matrix(missing)
+
+
+def test_load_scenarios_rejects_a_broken_matrix(tmp_path, flows) -> None:
+    _, inflow, hydro = flows
+    matrix = scenario_matrix(fill_gaps(reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)))
+    path = tmp_path / "scenarios.csv"
+    matrix.to_csv(path)
+    pd.testing.assert_frame_equal(load_scenarios(path), matrix)
+    matrix.drop(columns=[52]).to_csv(path)
+    with pytest.raises(InflowError, match="stages"):
+        load_scenarios(path)
 
 
 def test_annual_totals_rank_years_by_52_standard_weeks() -> None:
@@ -131,13 +175,21 @@ def test_annual_totals_rank_years_by_52_standard_weeks() -> None:
     per_week = cal["iso_year"].map({2019: 1_010.0, 2020: 1_000.0, 2021: 900.0})
     inflow = (per_week * cal["hours"] / HOURS_PER_WEEK).to_numpy()
     hydro = (1_000.0 * cal["hours"] / HOURS_PER_WEEK).to_numpy()
-    annual = annual_totals(fill_gaps(reconstruct(synthetic_weekly(inflow, hydro), NOISE_GWH)))
+    weekly = synthetic_weekly(inflow, hydro)
+    gap = week_mask(cal, 2021, 10)
+    weekly.loc[gap, "hydro_gwh"] = np.nan
+    annual = annual_totals(fill_gaps(reconstruct(weekly, NOISE_GWH)))
     # The ISO year keeps all 53 weeks of 2020; the model year has 52 standard weeks.
     assert annual.loc[2020, "inflow_iso_twh"] == pytest.approx(53 * 1.0)
     assert annual.loc[2020, "inflow_model_twh"] == pytest.approx(52 * 1.0)
     assert annual.loc[2019, "inflow_model_twh"] == pytest.approx(52 * 1.01)
     assert annual.loc[2020, "hydro_iso_twh"] == pytest.approx(53 * 1.0)
     assert annual.loc[2020, "hydro_model_twh"] == pytest.approx(52 * 1.0)
+    # 2021: the imputed week (mean of 1010 and 1000 GWh) counts in the inflow; the production
+    # of the year is unknown.
+    assert annual.loc[2021, "inflow_model_twh"] == pytest.approx((51 * 900 + 1_005) / 1_000)
+    assert annual.loc[2021, "imputed_weeks"] == 1
+    assert annual.loc[2021, ["hydro_iso_twh", "hydro_model_twh"]].isna().all()
     assert annual["wet_rank"].tolist() == [1, 2, 3]
     # 2020 has the largest ISO-year total but 2019 the wettest model year.
     assert dry_and_wet(annual) == (2021, 2019)
@@ -152,6 +204,12 @@ def test_climatology_spans_the_years(flows) -> None:
     assert (clim["min"] <= clim["mean"]).all()
     assert (clim["mean"] <= clim["max"]).all()
     np.testing.assert_allclose(clim["mean"], matrix.mean(axis=0))
+
+
+def test_scenario_years_must_match_the_period(flows) -> None:
+    _, inflow, hydro = flows
+    with pytest.raises(InflowError, match="period"):
+        build_inflow(CFG, synthetic_weekly(inflow, hydro))  # data 2019-2021, period 2015-2025
 
 
 def test_committed_dataset_gives_a_complete_scenario_matrix() -> None:
@@ -169,6 +227,9 @@ def test_committed_dataset_gives_a_complete_scenario_matrix() -> None:
         week_label(y, k) for y, k in zip(imputed["iso_year"], imputed["iso_week"], strict=True)
     )
     assert labels == expected
+    assert set(result.weekly["status"]) <= {"observed", "clipped", "imputed"}
+    unknown_production = result.annual.index[result.annual["hydro_iso_twh"].isna()]
+    assert unknown_production.tolist() == sorted(set(imputed["iso_year"]))
 
 
 def _config_with(tmp_path, **sections: dict) -> str:
@@ -190,11 +251,12 @@ def test_cli_inflow_writes_the_outputs(tmp_path) -> None:
     config = _config_with(tmp_path, inflow=outputs)
     result = CliRunner().invoke(app, ["inflow", "--config", config])
     assert result.exit_code == 0, result.output
-    scenarios = pd.read_csv(outputs["scenarios_csv"], index_col="iso_year")
-    years = CFG.period.last_iso_year - CFG.period.first_iso_year + 1
-    assert scenarios.shape == (years, MODEL_WEEKS_PER_YEAR)
+    expected = build_inflow(CFG, load_weekly(PROJECT_ROOT / CFG.data.weekly_csv)).scenarios
+    pd.testing.assert_frame_equal(
+        load_scenarios(outputs["scenarios_csv"]), expected, check_exact=False, atol=1e-3
+    )
     weekly = pd.read_csv(outputs["weekly_csv"])
-    assert {"balance_gwh", "inflow_gwh", "status"} <= set(weekly.columns)
+    assert {"balance_gwh", "inflow_stage_gwh", "status"} <= set(weekly.columns)
     assert "imputed" in (tmp_path / "inflow_report.txt").read_text(encoding="utf-8")
 
 

@@ -73,7 +73,8 @@ def test_inflow_climatology_highlights_years(scenarios) -> None:
 
 def test_annual_inflow_colours_the_dry_and_wet_years() -> None:
     annual = pd.DataFrame(
-        {"inflow_model_twh": [60.0, 75.0, 55.0], "hydro_model_twh": [64.0, 68.0, 62.0]},
+        # 2019: production unknown (NaN), so no marker is drawn
+        {"inflow_model_twh": [60.0, 75.0, 55.0], "hydro_model_twh": [np.nan, 68.0, 62.0]},
         index=pd.Index([2019, 2020, 2021], name="iso_year"),
     )
     ax = plots.annual_inflow(annual, dry=2021, wet=2020)

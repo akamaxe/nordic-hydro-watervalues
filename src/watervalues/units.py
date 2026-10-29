@@ -7,6 +7,7 @@ parameters live in ``config/base.yaml``.
 from typing import Final
 
 MWH_PER_GWH: Final = 1_000.0  # [MWh/GWh]
+GWH_PER_TWH: Final = 1_000.0  # [GWh/TWh]
 MINUTES_PER_HOUR: Final = 60  # [min/h]
 HOURS_PER_DAY: Final = 24  # [h/day]
 DAYS_PER_WEEK: Final = 7  # [day/week]
