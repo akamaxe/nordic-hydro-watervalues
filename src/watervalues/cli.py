@@ -39,6 +39,26 @@ def info(config: ConfigOption = None) -> None:
 
 
 @app.command()
+def fetch(
+    dataset: Annotated[
+        list[str] | None,
+        typer.Option("--dataset", "-d", help="generation, load, price or reservoir (repeatable)."),
+    ] = None,
+    force: Annotated[bool, typer.Option(help="Download again even if cached.")] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Download the raw data and rebuild the normalised cache in data/raw/."""
+    from watervalues.config import DATASETS
+    from watervalues.data.fetch import fetch_filelib
+
+    cfg = load_config(config)
+    if cfg.data.source != "filelib":
+        typer.echo("Only the File Library source is available until the API token arrives.")
+        raise typer.Exit(code=1)
+    fetch_filelib(cfg, dataset or list(DATASETS), force=force, progress=typer.echo)
+
+
+@app.command()
 def login(config: ConfigOption = None) -> None:
     """Check your ENTSO-E website login once and store it in the OS credential store.
 

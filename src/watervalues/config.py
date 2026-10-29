@@ -94,6 +94,35 @@ class DePriceConfig(_Section):
         return self
 
 
+class PriceFilterConfig(_Section):
+    """Which rows of the price exports are the day-ahead auction price."""
+
+    contract_type: str
+    currency: str
+    sequences: tuple[str, ...]
+
+
+class ReferenceConfig(_Section):
+    """External end-of-week storage observation [GWh]."""
+
+    area: str
+    iso_year: int
+    iso_week: int
+    stored_gwh: float
+
+
+class ReservoirDataConfig(_Section):
+    """Reservoir series and its labelling convention."""
+
+    area: str
+    label_semantics: Literal["start_of_week", "end_of_week", "weekly_mean"]
+    max_interp_weeks: int = Field(ge=0)
+    winter_weeks: tuple[int, int]
+    max_roughness_ratio: float = Field(gt=0, lt=1)
+    reference_tolerance_gwh: float = Field(gt=0)
+    references: tuple[ReferenceConfig, ...] = ()
+
+
 class FileLibConfig(_Section):
     """ENTSO-E File Library access (website login, no API token)."""
 
@@ -126,12 +155,21 @@ class DataConfig(_Section):
     price_zones: tuple[str, ...]
     areas: dict[str, AreaSpec]
     de_price: DePriceConfig
+    prices: PriceFilterConfig
     generation_categories: dict[str, tuple[str, ...]]
+    reservoir: ReservoirDataConfig
     filelib: FileLibConfig
 
     @model_validator(mode="after")
     def _check_references(self) -> DataConfig:
-        named = {self.country, *self.price_zones, self.de_price.before, self.de_price.after}
+        named = {
+            self.country,
+            *self.price_zones,
+            self.de_price.before,
+            self.de_price.after,
+            self.reservoir.area,
+            *(ref.area for ref in self.reservoir.references),
+        }
         missing = sorted(named - set(self.areas))
         if missing:
             raise ValueError(f"areas used but not defined in data.areas: {missing}")

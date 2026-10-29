@@ -35,23 +35,42 @@ data:
   csv_float_format: "%.3f"
   country: SE
   price_zones: [SE1, SE2, SE3, SE4]
-  areas:                      # EIC code and, once checked in the exports, the AreaTypeCode
-    SE: {eic: "10YSE-1--------K", area_type: null}
-    SE1: {eic: "10Y1001A1001A44P", area_type: null}
-    SE2: {eic: "10Y1001A1001A45N", area_type: null}
-    SE3: {eic: "10Y1001A1001A46L", area_type: null}
-    SE4: {eic: "10Y1001A1001A47J", area_type: null}
-    DE_LU: {eic: "10Y1001A1001A82H", area_type: null}
+  areas:                      # EIC code and AreaTypeCode as found in the exports (null: any)
+    SE: {eic: "10YSE-1--------K", area_type: CTA/CTY}
+    SE1: {eic: "10Y1001A1001A44P", area_type: BZN}
+    SE2: {eic: "10Y1001A1001A45N", area_type: BZN}
+    SE3: {eic: "10Y1001A1001A46L", area_type: BZN}
+    SE4: {eic: "10Y1001A1001A47J", area_type: BZN}
+    DE_LU: {eic: "10Y1001A1001A82H", area_type: BZN}
     DE_AT_LU: {eic: "10Y1001A1001A63L", area_type: null}
   de_price:                   # German day-ahead price: bidding-zone split on 2018-10-01
     before: DE_AT_LU
     after: DE_LU
     switch_utc: "2018-09-30T22:00:00Z"
+  prices:                     # day-ahead auction rows to keep from the price exports
+    contract_type: Day-ahead
+    currency: EUR
+    sequences: ["", "1"]      # no sequence, or sequence 1 (SDAC) where several auctions exist
   generation_categories:      # ENTSO-E production types (PSR codes); the rest is "other"
     hydro: [B10, B11, B12]
     nuclear: [B14]
     wind: [B18, B19]
     solar: [B16]
+  reservoir:
+    area: SE
+    # Value published for ISO week w = storage at the END of week w. Verified: ENTSO-E 2026-W43
+    # equals Energiföretagen "Kraftläget i Sverige" week 43/2026 ("vid veckans slut") in all areas.
+    label_semantics: end_of_week
+    max_interp_weeks: 1       # a single missing weekly value is interpolated (and reported)
+    winter_weeks: [2, 14]     # ISO weeks used by the physics check of the convention
+    max_roughness_ratio: 0.7
+    reference_tolerance_gwh: 1
+    references:               # Energiföretagen, Kraftläget i Sverige, vecka 43 2026, page 1
+      - {area: SE, iso_year: 2026, iso_week: 43, stored_gwh: 25339}
+      - {area: SE1, iso_year: 2026, iso_week: 43, stored_gwh: 10447}
+      - {area: SE2, iso_year: 2026, iso_week: 43, stored_gwh: 12976}
+      - {area: SE3, iso_year: 2026, iso_week: 43, stored_gwh: 1872}
+      - {area: SE4, iso_year: 2026, iso_week: 43, stored_gwh: 44}
   filelib:
     keyring_service: nordic-hydro-watervalues/entsoe-tp
     token_url: https://keycloak.tp.entsoe.eu/realms/tp/protocol/openid-connect/token
