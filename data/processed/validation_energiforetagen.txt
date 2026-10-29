@@ -4,11 +4,11 @@ Weeks with a zero filling or inflow (not reported), ignored: ['2020-W51', '2020-
 Weeks with a filling above 100 % (entry errors), ignored: ['2022-W38', '2022-W39']
 
 1) Filling at the end of workbook week w vs the ENTSO-E value labelled w + k [GWh]
-    median_abs_gwh  p90_abs_gwh      n
-k                                     
--1           670.3       1508.1  358.0
-0             95.8        239.8  359.0
-1            688.6       1515.9  359.0
+    median_abs_gwh  p90_abs_gwh    n
+k                                   
+-1           670.3       1508.1  358
+0             95.8        239.8  359
+1            688.6       1515.9  359
    offset 0, per ISO year:
           median_abs_gwh  max_abs_gwh
 iso_year                             

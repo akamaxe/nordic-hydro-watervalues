@@ -283,7 +283,7 @@ def compare(
         last_week=labels[-1],
         not_reported=[label for label, bad in zip(labels, zero, strict=True) if bad],
         entry_errors=[label for label, bad in zip(labels, too_full, strict=True) if bad],
-        storage_offsets=pd.DataFrame(offsets).T.rename_axis("k"),
+        storage_offsets=pd.DataFrame(offsets).T.astype({"n": int}).rename_axis("k"),
         storage_by_year=by_year.rename_axis("iso_year"),
         hydro_lag_corr=lag_corr,
         hydro_ratio_by_year=ratio.rename_axis("iso_year"),
