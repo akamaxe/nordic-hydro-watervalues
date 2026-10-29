@@ -120,13 +120,16 @@ class FakeApi:
         self.calls: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
         self.fail_with = fail_with
 
+    DATA_START = pd.Timestamp("2014-12-31 23:00", tz="UTC")  # 2015-01-01 00:00 CET
+
     def _index(self, start, end, freq):
         if self.fail_with is not None:
             raise self.fail_with
-        if end <= pd.Timestamp("2015-01-01", tz="UTC"):
+        if end <= self.DATA_START:
             raise NoMatchingDataError  # no data before the platform started
         # entsoe-py returns local time and includes the end instant
-        return pd.date_range(start, end, freq=freq, tz="UTC").tz_convert("Europe/Stockholm")
+        first = max(start, self.DATA_START)
+        return pd.date_range(first, end, freq=freq, tz="UTC").tz_convert("Europe/Stockholm")
 
     def query_generation(self, country_code, *, start, end, **kwargs):
         self.calls.append(("generation", start, end))
@@ -169,8 +172,11 @@ def test_fetch_api_writes_a_continuous_cache(cfg, tmp_path) -> None:
     client = FakeApi()
     fetch_api(cfg, ["load", "price", "reservoir"], client=client, progress=lambda _: None)
     load = read_dataset(tmp_path, "entsoe_api", "load", "SE")
-    assert load["start_utc"].min() == pd.Timestamp("2015-01-01", tz="UTC")
-    assert not load["start_utc"].duplicated().any()  # inclusive window ends were deduplicated
+    # The first hour (2015-01-01 00:00 CET) is alone in its window; the request margin gives
+    # it neighbours, so its resolution can be inferred.
+    assert load["start_utc"].min() == FakeApi.DATA_START
+    assert (load["resolution_min"] == 60).all()
+    assert not load["start_utc"].duplicated().any()  # margins and inclusive ends trimmed
     assert load["start_utc"].max() == pd.Timestamp("2016-12-31 23:00", tz="UTC")
     prices = read_dataset(tmp_path, "entsoe_api", "price", "SE1")
     assert (prices["sequence"] == "").all()
@@ -181,7 +187,8 @@ def test_fetch_api_writes_a_continuous_cache(cfg, tmp_path) -> None:
     steps = np.diff(weeks.as_unit("ns").asi8)
     assert (steps == pd.Timedelta(days=7).value).all()  # no missing week
     first_window = next(c for c in client.calls if c[0] == "load")
-    assert first_window[1] == pd.Timestamp("2014-12-29", tz="UTC")  # start of ISO 2015-W01
+    # Start of ISO 2015-W01 (2014-12-29) minus the one-day request margin.
+    assert first_window[1] == pd.Timestamp("2014-12-28", tz="UTC")
 
 
 class FlakyApi(FakeApi):
@@ -210,13 +217,9 @@ def test_cached_years_are_not_requested_again(cfg) -> None:
     fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
     first_run = list(client.calls)
     fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
-    second_run = client.calls[len(first_run) :]
-    # Only the windows without data (before the platform started) are asked again.
-    assert second_run and all(
-        end <= pd.Timestamp("2015-01-01", tz="UTC") for _, _, end in second_run
-    )
+    assert client.calls == first_run  # every year came from the cache
     fetch_api(cfg, ["load"], client=client, force=True, progress=lambda _: None)
-    assert len(client.calls) == 2 * len(first_run) + len(second_run)
+    assert len(client.calls) == 2 * len(first_run)
 
 
 def test_generation_is_queried_for_the_country_only(cfg) -> None:

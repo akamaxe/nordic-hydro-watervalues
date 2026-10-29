@@ -36,6 +36,7 @@ SOURCE = "entsoe_api"
 API_KEY_ENV = "ENTSOE_API_KEY"
 _HALF_DAY = pd.Timedelta(hours=12)
 WEEK_SPAN = pd.Timedelta(days=7)
+_REQUEST_MARGIN = pd.Timedelta(days=1)  # neighbours for resolution inference at window edges
 _REPORT_TZ = "Europe/Stockholm"  # reservoir weeks are published in Swedish local time
 _GENERATION, _CONSUMPTION = "Actual Aggregated", "Actual Consumption"
 
@@ -271,15 +272,21 @@ def _windows(cfg: AppConfig, dataset: str) -> list[tuple[pd.Timestamp, pd.Timest
 def _query(
     client: ApiClient, dataset: str, eic: str, start: pd.Timestamp, end: pd.Timestamp
 ) -> pd.DataFrame:
-    """One API request, normalised (raises entsoe's NoMatchingDataError when empty)."""
+    """One API request, normalised (raises entsoe's NoMatchingDataError when empty).
+
+    Interval data is requested with one day of margin on each side, so that the resolution of
+    the first and last points can be inferred from their neighbours; the caller trims the result
+    to the window.
+    """
+    if dataset == "reservoir":
+        return parse_reservoir_xml(client.reservoir_xml(eic, start=start, end=end))
+    padded = {"start": start - _REQUEST_MARGIN, "end": end + _REQUEST_MARGIN}
     if dataset == "generation":
-        return normalise_generation(client.query_generation(eic, start=start, end=end))
+        return normalise_generation(client.query_generation(eic, **padded))
     if dataset == "load":
-        return normalise_series(client.query_load(eic, start=start, end=end), "value_mw")
-    if dataset == "price":
-        prices = client.query_day_ahead_prices(eic, start=start, end=end)
-        return normalise_series(prices, "price_eur_mwh").assign(sequence="")
-    return parse_reservoir_xml(client.reservoir_xml(eic, start=start, end=end))
+        return normalise_series(client.query_load(eic, **padded), "value_mw")
+    prices = client.query_day_ahead_prices(eic, **padded)
+    return normalise_series(prices, "price_eur_mwh").assign(sequence="")
 
 
 def fetch_api(
