@@ -1,7 +1,7 @@
 area: SE
-period:
-  start: "2015-01-01"
-  end: "2025-12-31"
+period:                       # ISO years (weeks run Monday-Monday in UTC)
+  first_iso_year: 2015
+  last_iso_year: 2025
 
 reservoir:
   capacity_gwh: null          # null -> use the maximum observed historical storage
@@ -25,3 +25,97 @@ simulation:
 
 scenarios:
   de_price_levels_eur_mwh: [50, 80, 120]
+
+data:
+  source: entsoe_api          # entsoe_api (REST API token) | filelib (website login)
+  raw_dir: data/raw
+  weekly_csv: data/processed/weekly_se.csv
+  build_report: data/processed/build_report.txt   # sanity report of the last build
+  known_gaps_file: data/known_gaps.yaml
+  min_coverage: 0.95          # share of a week's hours with data; below it the week is NaN
+  csv_float_format: "%.3f"
+  country: SE
+  price_zones: [SE1, SE2, SE3, SE4]
+  areas:                      # EIC code and AreaTypeCode as found in the exports (null: any)
+    SE: {eic: "10YSE-1--------K", area_type: CTA/CTY}
+    SE1: {eic: "10Y1001A1001A44P", area_type: BZN}
+    SE2: {eic: "10Y1001A1001A45N", area_type: BZN}
+    SE3: {eic: "10Y1001A1001A46L", area_type: BZN}
+    SE4: {eic: "10Y1001A1001A47J", area_type: BZN}
+    DE_LU: {eic: "10Y1001A1001A82H", area_type: BZN}
+    DE_AT_LU: {eic: "10Y1001A1001A63L", area_type: null}
+  de_price:                   # German day-ahead price: bidding-zone split on 2018-10-01
+    before: DE_AT_LU
+    after: DE_LU
+    switch_utc: "2018-09-30T22:00:00Z"
+  prices:                     # day-ahead auction rows to keep from the price exports
+    contract_type: Day-ahead
+    currency: EUR
+    sequences: ["", "1"]      # no sequence, or sequence 1 (SDAC) where several auctions exist
+  generation_categories:      # ENTSO-E production types (PSR codes); the rest is "other"
+    hydro: [B10, B11, B12]
+    nuclear: [B14]
+    wind: [B18, B19]
+    solar: [B16]
+  # Types that ENTSO-E reports for Sweden only during part of the period (the build report lists
+  # each type's first and last interval): outside that span they count as zero. Any other type
+  # that is absent for a week makes its category missing, e.g. nuclear absent at the cache end.
+  partial_period_types: [B04, B13, B16]
+  reservoir:
+    area: SE
+    # Value published for ISO week w = storage at the END of week w. Verified: ENTSO-E 2026-W43
+    # equals Energiföretagen "Kraftläget i Sverige" week 43/2026 ("vid veckans slut") in all areas,
+    # and `watervalues validate` compares 2019-2025 with Energiföretagen's weekly statistics.
+    label_semantics: end_of_week
+    max_interp_weeks: 1       # a single missing weekly value is interpolated (and reported)
+    winter_weeks: [2, 14]     # ISO weeks used by the physics check of the convention
+    # Winter-inflow roughness of the configured convention / the labels shifted by one week.
+    # Roughness cannot rule out a weekly mean (see watervalues.data.reservoir): references do.
+    max_shift_roughness_ratio: 0.7
+    reference_tolerance_gwh: 1
+    references:               # Energiföretagen, Kraftläget i Sverige, vecka 43 2026, page 1
+      - {area: SE, iso_year: 2026, iso_week: 43, stored_gwh: 25339}
+      - {area: SE1, iso_year: 2026, iso_week: 43, stored_gwh: 10447}
+      - {area: SE2, iso_year: 2026, iso_week: 43, stored_gwh: 12976}
+      - {area: SE3, iso_year: 2026, iso_week: 43, stored_gwh: 1872}
+      - {area: SE4, iso_year: 2026, iso_week: 43, stored_gwh: 44}
+  sanity:                     # guide section 4 orders of magnitude, widened; warnings only
+    load_twh_per_year: [120, 150]
+    hydro_twh_per_year: [55, 80]
+    storage_capacity_ref_gwh: 33700   # Energiföretagen: 100 % = 33.7 TWh
+    zone_load_rel_tol: 0.02           # |sum of SE1-SE4 load / SE load - 1|
+    max_pumping_share: 0.01           # pumping consumption / hydro production
+  api:                        # ENTSO-E REST API through entsoe-py
+    env_file: .env            # holds ENTSOE_API_KEY (never committed)
+    retry_count: 3            # entsoe-py's own attempts on connection errors
+    retry_delay_s: 10
+    timeout_s: 120
+    max_retries: 4            # our retries on timeouts and server errors (exponential backoff)
+    backoff_s: 15
+  filelib:
+    keyring_service: nordic-hydro-watervalues/entsoe-tp
+    token_url: https://keycloak.tp.entsoe.eu/realms/tp/protocol/openid-connect/token
+    client_id: tp-fms-public
+    timeout_s: 300
+    max_requests_per_minute: 30   # the File Library allows 100; HTTP 429 bans for 10 minutes
+    max_retries: 4
+    backoff_s: 5
+    read_chunk_rows: 200000       # exports are read in chunks to keep memory bounded
+    folders:
+      generation: AggregatedGenerationPerType_16.1.B_C_r3
+      load: ActualTotalLoad_6.1.A_r3
+      price: EnergyPrices_12.1.D_r3.1
+      reservoir: AggregatedFillingRateOfWaterReservoirsAndHydroStoragePlants_16.1.D_r3
+  energiforetagen:            # independent check of the reservoir data (`watervalues validate`)
+    dir: data/external/energiforetagen   # downloaded workbooks, never committed
+    report: data/processed/validation_energiforetagen.txt
+    max_storage_gwh: 33748    # "(max mag 33 748 GWh)", printed under the filling row
+    timeout_s: 60
+    workbooks:                # "Veckostatistik": energiforetagen.se/statistik/elstatistik/arkiv-aldre-statistik/
+      2019: https://www.energiforetagen.se/4a4a79/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2019.xlsx
+      2020: https://www.energiforetagen.se/4ab721/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-53_2020_v2.xlsx
+      2021: https://www.energiforetagen.se/4ab73f/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2021_v2.xlsx
+      2022: https://www.energiforetagen.se/4ab735/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2022_v2.xlsx
+      2023: https://www.energiforetagen.se/49812f/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2023_ver_d.xlsx
+      2024: https://www.energiforetagen.se/496e9b/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2024_ver_v.xlsx
+      2025: https://www.energiforetagen.se/499f8e/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2025_ver_a.xlsx

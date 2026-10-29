@@ -2,6 +2,7 @@
 
 import socket
 
+import keyring
 import pytest
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -25,5 +26,12 @@ def _no_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest)
 
 @pytest.fixture(autouse=True)
 def _no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hide ENTSO-E credentials from the environment."""
-    monkeypatch.delenv("ENTSOE_API_KEY", raising=False)
+    """Hide ENTSO-E credentials: environment variables and the OS credential store."""
+    for name in ("ENTSOE_API_KEY", "ENTSOE_USERNAME", "ENTSOE_PWD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(keyring, "get_credential", lambda service, username: None)
+    monkeypatch.setattr(keyring, "get_password", lambda service, username: None)
+    # Never read the project's real .env (it holds the API token).
+    from watervalues.data import entsoe_api
+
+    monkeypatch.setattr(entsoe_api, "load_dotenv", lambda *args, **kwargs: False)

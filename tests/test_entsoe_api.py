@@ -1,0 +1,299 @@
+"""Tests for the entsoe-py source (fake client shaped like entsoe-py 0.8.1 output)."""
+
+import os
+
+import dotenv
+import numpy as np
+import pandas as pd
+import pytest
+import requests
+from entsoe.exceptions import NoMatchingDataError
+
+from watervalues.config import load_config
+from watervalues.data import entsoe_api
+from watervalues.data.cache import read_dataset
+from watervalues.data.entsoe_api import (
+    ApiError,
+    check_api,
+    fetch_api,
+    get_api_key,
+    infer_resolution_min,
+    normalise_generation,
+    normalise_series,
+    parse_reservoir_xml,
+)
+from watervalues.data.filelib import CredentialsError
+
+TOKEN = "secret-token-123"
+
+
+def test_resolution_follows_the_spacing_of_the_index() -> None:
+    hourly = pd.date_range("2025-09-30 22:00", periods=2, freq="h", tz="UTC")
+    quarter = pd.date_range("2025-10-01 00:00", periods=4, freq="15min", tz="UTC")
+    gap_then_point = pd.DatetimeIndex(["2025-10-01 03:00", "2025-10-01 03:15"], tz="UTC")
+    index = hourly.append(quarter).append(gap_then_point)
+    assert infer_resolution_min(index).tolist() == [60, 60, 15, 15, 15, 15, 15, 15]
+
+
+def test_generation_multiindex_and_flat_columns_normalise_alike() -> None:
+    idx = pd.date_range("2025-01-01 00:00", periods=3, freq="h", tz="Europe/Stockholm")
+    multi = pd.DataFrame(
+        {
+            ("Hydro Water Reservoir", "Actual Aggregated"): [8000.0, 8100.0, np.nan],
+            ("Hydro Pumped Storage", "Actual Aggregated"): [1.0, 2.0, 3.0],
+            ("Hydro Pumped Storage", "Actual Consumption"): [5.0, 0.0, 0.0],
+            ("Hydro Run-of-river and poundage", "Actual Aggregated"): [10.0, 10.0, 10.0],
+        },
+        index=idx,
+    )
+    out = normalise_generation(multi)
+    assert sorted(out["psr_type"].unique()) == ["B10", "B11", "B12"]  # poundage == pondage
+    b10 = out[out["psr_type"] == "B10"]
+    assert b10["consumption_mw"].tolist() == [5.0, 0.0, 0.0]
+    assert out["start_utc"].iloc[0] == pd.Timestamp("2024-12-31 23:00", tz="UTC")
+    assert np.isnan(out[out["psr_type"] == "B12"]["value_mw"].iloc[2])  # missing stays NaN
+    flat = pd.DataFrame({"Nuclear": [6000.0, 6000.0, 6000.0]}, index=idx)
+    nuclear = normalise_generation(flat)
+    assert nuclear["psr_type"].unique().tolist() == ["B14"]
+    assert (nuclear["consumption_mw"] == 0).all()
+    assert (nuclear["resolution_min"] == 60).all()
+
+
+def test_series_normalisation_converts_to_utc() -> None:
+    idx = pd.date_range("2025-06-01 00:00", periods=2, freq="h", tz="Europe/Stockholm")
+    out = normalise_series(pd.DataFrame({"Actual Load": [1.0, 2.0]}, index=idx), "value_mw")
+    assert out["start_utc"].iloc[0] == pd.Timestamp("2025-05-31 22:00", tz="UTC")
+    assert out["value_mw"].tolist() == [1.0, 2.0]
+
+
+def a72(periods, curve="A03", resolution="P7D") -> str:
+    """Minimal A72 document; ``periods`` = [(start, end, [(position, quantity), ...]), ...]."""
+    series = "".join(
+        f"<TimeSeries><curveType>{curve}</curveType><Period><timeInterval><start>{s}</start>"
+        f"<end>{e}</end></timeInterval><resolution>{resolution}</resolution>"
+        + "".join(
+            f"<Point><position>{p}</position><quantity>{q}</quantity></Point>" for p, q in points
+        )
+        + "</Period></TimeSeries>"
+        for s, e, points in periods
+    )
+    namespace = "urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0"
+    return (
+        f'<?xml version="1.0"?><GL_MarketDocument xmlns="{namespace}">{series}</GL_MarketDocument>'
+    )
+
+
+def labels(frame) -> list[tuple[int, int]]:
+    return list(zip(frame["iso_year"], frame["iso_week"], strict=True))
+
+
+def test_reservoir_period_crossing_dst_keeps_its_last_week() -> None:
+    # As served for Sweden in 2016: a period starting in winter (Monday 00:00 CET) and ending
+    # in summer (Monday 00:00 CEST) right before a missing week. entsoe-py 0.8.1 loses its last
+    # week (2016-W38); counting calendar weeks from the local Monday keeps it.
+    start, end = "2015-12-27T23:00Z", "2016-09-25T22:00Z"
+    points = [(p, 1000.0 * p) for p in range(1, 40)]
+    out = parse_reservoir_xml(a72([(start, end, points)]))
+    assert labels(out)[0] == (2015, 53)
+    assert labels(out)[-1] == (2016, 38)
+    assert out["stored_mwh"].iloc[-1] == 39_000.0
+
+
+def test_reservoir_a03_omitted_positions_repeat_the_last_value() -> None:
+    xml = a72([("2026-10-04T22:00Z", "2026-10-25T22:00Z", [(1, 5.0), (3, 7.0)])])
+    out = parse_reservoir_xml(xml)
+    assert labels(out) == [(2026, 41), (2026, 42), (2026, 43)]
+    assert out["stored_mwh"].tolist() == [5.0, 5.0, 7.0]
+
+
+def test_reservoir_requires_weekly_resolution() -> None:
+    with pytest.raises(ValueError, match="P7D"):
+        parse_reservoir_xml(
+            a72([("2026-10-04T22:00Z", "2026-10-11T22:00Z", [(1, 1.0)])], resolution="P1D")
+        )
+
+
+class FakeApi:
+    """Deterministic client: one constant value per dataset, honouring the requested window."""
+
+    def __init__(self, fail_with: Exception | None = None) -> None:
+        self.calls: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
+        self.fail_with = fail_with
+
+    DATA_START = pd.Timestamp("2014-12-31 23:00", tz="UTC")  # 2015-01-01 00:00 CET
+
+    def _index(self, start, end, freq):
+        if self.fail_with is not None:
+            raise self.fail_with
+        if end <= self.DATA_START:
+            raise NoMatchingDataError  # no data before the platform started
+        # entsoe-py returns local time and includes the end instant
+        first = max(start, self.DATA_START)
+        return pd.date_range(first, end, freq=freq, tz="UTC").tz_convert("Europe/Stockholm")
+
+    def query_generation(self, country_code, *, start, end, **kwargs):
+        self.calls.append(("generation", start, end))
+        return pd.DataFrame({"Nuclear": 6000.0}, index=self._index(start, end, "h"))
+
+    def query_load(self, country_code, *, start, end):
+        self.calls.append(("load", start, end))
+        return pd.DataFrame({"Actual Load": 15000.0}, index=self._index(start, end, "h"))
+
+    def query_day_ahead_prices(self, country_code, *, start, end):
+        self.calls.append(("price", start, end))
+        return pd.Series(40.0, index=self._index(start, end, "h"))
+
+    def reservoir_xml(self, country_code, *, start, end):
+        self.calls.append(("reservoir", start, end))
+        if end <= pd.Timestamp("2015-01-01", tz="UTC"):
+            raise NoMatchingDataError
+        local = pd.date_range(start.tz_convert(None), end.tz_convert(None), freq="W-MON")
+        mondays = local.tz_localize("Europe/Stockholm").tz_convert("UTC")
+        period_end = (
+            (local[-1] + pd.Timedelta(days=7)).tz_localize("Europe/Stockholm").tz_convert("UTC")
+        )
+        points = [(i + 1, 20_000_000.0 + i) for i in range(len(mondays))]
+        return a72(
+            [(f"{mondays[0]:%Y-%m-%dT%H:%MZ}", f"{period_end:%Y-%m-%dT%H:%MZ}", points)],
+            curve="A01",
+        )
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    base = load_config()
+    period = base.period.model_copy(update={"first_iso_year": 2015, "last_iso_year": 2016})
+    reservoir = base.data.reservoir.model_copy(update={"references": ()})
+    data = base.data.model_copy(update={"raw_dir": tmp_path, "reservoir": reservoir})
+    return base.model_copy(update={"period": period, "data": data})
+
+
+def test_fetch_api_writes_a_continuous_cache(cfg, tmp_path) -> None:
+    client = FakeApi()
+    fetch_api(cfg, ["load", "price", "reservoir"], client=client, progress=lambda _: None)
+    load = read_dataset(tmp_path, "entsoe_api", "load", "SE")
+    # The first hour (2015-01-01 00:00 CET) is alone in its window; the request margin gives
+    # it neighbours, so its resolution can be inferred.
+    assert load["start_utc"].min() == FakeApi.DATA_START
+    assert (load["resolution_min"] == 60).all()
+    assert not load["start_utc"].duplicated().any()  # margins and inclusive ends trimmed
+    # ISO 2016-W52 ends on Monday 2017-01-02: a short final window covers its last day.
+    assert load["start_utc"].max() == pd.Timestamp("2017-01-01 23:00", tz="UTC")
+    assert len(pd.read_parquet(tmp_path / "entsoe_api/load/SE/2017.parquet")) == 24
+    prices = read_dataset(tmp_path, "entsoe_api", "price", "SE1")
+    assert (prices["sequence"] == "").all()
+    reservoir = read_dataset(tmp_path, "entsoe_api", "reservoir", "SE")
+    labels = list(zip(reservoir["iso_year"], reservoir["iso_week"], strict=True))
+    assert len(labels) == len(set(labels))  # overlapping windows deduplicated
+    weeks = pd.DatetimeIndex([pd.Timestamp.fromisocalendar(y, w, 1) for y, w in sorted(labels)])
+    steps = np.diff(weeks.as_unit("ns").asi8)
+    assert (steps == pd.Timedelta(days=7).value).all()  # no missing week
+    first_window = next(c for c in client.calls if c[0] == "load")
+    # Start of ISO 2015-W01 (2014-12-29) minus the one-day request margin.
+    assert first_window[1] == pd.Timestamp("2014-12-28", tz="UTC")
+
+
+def test_a_year_cached_before_it_was_complete_is_requested_again(cfg, tmp_path) -> None:
+    fetch_api(cfg, ["load"], client=FakeApi(), progress=lambda _: None)
+    path = tmp_path / "entsoe_api/load/SE/2016.parquet"
+    complete = pd.read_parquet(path)
+    complete[complete["start_utc"] < "2016-07-01"].to_parquet(path, index=False)  # half a year
+    client = FakeApi()
+    fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
+    requested = [c[1].year for c in client.calls]
+    assert requested == [2015]  # 2016 - 1 day margin: only the incomplete year again
+    assert len(pd.read_parquet(path)) == len(complete)
+
+
+def test_resolution_ignores_a_missing_quarter_hour_and_follows_a_switch_to_hours() -> None:
+    def minutes(*times: str) -> list[int]:
+        return infer_resolution_min(pd.DatetimeIndex(list(times), tz="UTC")).tolist()
+
+    # :30 missing: the :15 value is not a 30-minute interval (it would not be aligned).
+    assert minutes("00:00", "00:15", "00:45", "01:00", "01:15") == [15] * 5
+    # :15 missing: the :00 value still covers 15 minutes, not 30.
+    assert (
+        minutes(
+            "2025-10-05 23:45",
+            "2025-10-06 00:00",
+            "2025-10-06 00:30",
+            "2025-10-06 00:45",
+            "2025-10-06 01:00",
+        )
+        == [15] * 5
+    )
+    # A switch from 15 to 60 minutes: the first hourly value starts a stable block.
+    assert minutes("00:00", "00:15", "00:30", "00:45", "01:00", "02:00", "03:00") == [
+        15,
+        15,
+        15,
+        15,
+        60,
+        60,
+        60,
+    ]
+
+
+class FlakyApi(FakeApi):
+    """Times out on the first request, then answers normally."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts = 1
+
+    def query_load(self, country_code, *, start, end):
+        if self.timeouts:
+            self.timeouts -= 1
+            raise requests.ReadTimeout("read timed out")
+        return super().query_load(country_code, start=start, end=end)
+
+
+def test_timeouts_are_retried(cfg, tmp_path) -> None:
+    pauses: list[float] = []
+    fetch_api(cfg, ["load"], client=FlakyApi(), progress=lambda _: None, sleep=pauses.append)
+    assert len(pauses) == 1
+    assert not read_dataset(tmp_path, "entsoe_api", "load", "SE").empty
+
+
+def test_cached_years_are_not_requested_again(cfg) -> None:
+    client = FakeApi()
+    fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
+    first_run = list(client.calls)
+    fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
+    assert client.calls == first_run  # every year came from the cache
+    fetch_api(cfg, ["load"], client=client, force=True, progress=lambda _: None)
+    assert len(client.calls) == 2 * len(first_run)
+
+
+def test_generation_is_queried_for_the_country_only(cfg) -> None:
+    client = FakeApi()
+    summary = fetch_api(cfg, ["generation"], client=client, progress=lambda _: None)
+    assert list(summary["generation"]) == ["SE"]
+
+
+def test_errors_are_redacted(cfg) -> None:
+    leaky = RuntimeError(f"401 Client Error for url: https://x/api?securityToken={TOKEN}")
+    with pytest.raises(ApiError) as excinfo:
+        fetch_api(cfg, ["load"], client=FakeApi(leaky), api_key=TOKEN, progress=lambda _: None)
+    assert TOKEN not in str(excinfo.value)
+    assert "***" in str(excinfo.value)
+    with pytest.raises(ApiError) as excinfo:
+        check_api(cfg, client=FakeApi(leaky), api_key=TOKEN)
+    assert TOKEN not in str(excinfo.value)
+
+
+def test_check_api_counts_prices(cfg) -> None:
+    assert check_api(cfg, client=FakeApi()) == 25  # 24 hours plus the inclusive end
+
+
+def test_api_key_comes_from_env_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(os, "environ", os.environ.copy())  # keep the test's env changes local
+    monkeypatch.setattr(entsoe_api, "load_dotenv", dotenv.load_dotenv)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"ENTSOE_API_KEY={TOKEN}\n", encoding="utf-8")
+    assert get_api_key(env_file) == TOKEN
+
+
+def test_missing_api_key_explains_what_to_do(tmp_path) -> None:
+    with pytest.raises(CredentialsError, match="ENTSOE_API_KEY"):
+        get_api_key(tmp_path / ".env")

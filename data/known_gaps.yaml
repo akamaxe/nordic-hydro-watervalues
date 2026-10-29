@@ -1,0 +1,30 @@
+# Missing values (NaN) of data/processed/weekly_se.csv that are explained.
+# `watervalues build --strict` fails on any NaN cell not listed here. How the model treats
+# these weeks is decided in M2; nothing is imputed in the weekly dataset.
+
+- weeks: [2015-W01]
+  columns: [hydro_gwh, load_gwh, nuclear_gwh, wind_gwh, solar_gwh, other_gwh, price_de_eur_mwh]
+  reason: >-
+    ISO week 2015-W01 starts on Monday 2014-12-29, before the ENTSO-E Transparency Platform
+    data: SE generation and the DE-AT-LU price start on 2015-01-05 00:00 CET and the SE load on
+    2015-01-01 00:00 CET, so these series cover less of the week than data.min_coverage.
+
+- weeks: [2015-W50]
+  columns: [hydro_gwh, load_gwh, nuclear_gwh, other_gwh, price_se_eur_mwh]
+  reason: >-
+    ENTSO-E has no SE load (country and all four bidding zones) and no SE hydro, nuclear or
+    "other" generation for part of the week; the File Library load export has the same gap.
+    The SE price is load-weighted, so it is missing too; the zone prices are complete.
+
+- weeks: [2021-W50]
+  columns: [solar_gwh, other_gwh]
+  reason: >-
+    Solar (B16), fossil gas (B04) and marine (B13, always reported as zero) are first reported
+    on 2021-12-14 23:00 UTC, inside this week, so they cover less of it than data.min_coverage
+    and the solar and "other" categories are missing.
+
+- weeks: [2022-W06]
+  columns: [other_gwh]
+  reason: >-
+    Marine (B13), always reported as zero for Sweden, is last reported on 2022-02-13 and has
+    gaps in this week, which makes the "other" category incomplete.

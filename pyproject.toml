@@ -14,6 +14,7 @@ dependencies = [
     "keyring>=25.7.0",
     "matplotlib>=3.11.2",
     "numpy>=2.5.4",
+    "openpyxl>=3.1.5",
     "pandas>=3.1.0",
     "pyarrow>=26.0.0",
     "pydantic>=2.14.1",
@@ -51,8 +52,9 @@ select = [
     "D",        # docstrings (NumPy convention)
 ]
 ignore = [
-    "D105",  # magic methods need no docstring
-    "D107",  # __init__ is documented in the class docstring
+    "D105",   # magic methods need no docstring
+    "D107",   # __init__ is documented in the class docstring
+    "PD010",  # Series.unstack on a MultiIndex is the idiomatic reshape
 ]
 allowed-confusables = ["×", "−", "–", "·"]
 
