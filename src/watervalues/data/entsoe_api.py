@@ -10,9 +10,11 @@ kept at WARNING and every error is re-raised with the token redacted.
 
 from __future__ import annotations
 
+import functools
 import itertools
 import logging
 import os
+import time
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
@@ -23,10 +25,10 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from watervalues.config import PROJECT_ROOT, AppConfig, DataConfig
-from watervalues.data.aggregate import ALLOWED_RESOLUTIONS_MIN, drop_revisions
-from watervalues.data.cache import write_dataset
+from watervalues.data.aggregate import ALLOWED_RESOLUTIONS_MIN, RevisionStats, drop_revisions
+from watervalues.data.cache import partition_path, write_dataset, write_partition
 from watervalues.data.fetch import SPECS, AreaResult, dataset_areas, period_bounds
-from watervalues.data.filelib import CredentialsError
+from watervalues.data.filelib import CredentialsError, RateLimiter, call_with_retries
 from watervalues.data.schema import psr_code
 
 SOURCE = "entsoe_api"
@@ -207,15 +209,39 @@ def _windows(cfg: AppConfig, dataset: str) -> list[tuple[pd.Timestamp, pd.Timest
     return list(itertools.pairwise(edges))
 
 
+def _query(
+    client: ApiClient, dataset: str, eic: str, start: pd.Timestamp, end: pd.Timestamp, overlap
+) -> pd.DataFrame:
+    """One API request, normalised (raises entsoe's NoMatchingDataError when empty)."""
+    if dataset == "generation":
+        return normalise_generation(client.query_generation(eic, start=start, end=end))
+    if dataset == "load":
+        return normalise_series(client.query_load(eic, start=start, end=end), "value_mw")
+    if dataset == "price":
+        prices = client.query_day_ahead_prices(eic, start=start, end=end)
+        return normalise_series(prices, "price_eur_mwh").assign(sequence="")
+    # Overlapping windows: entsoe-py 0.8.1 drops the weeks at its yearly block boundaries.
+    series = client.query_aggregate_water_reservoirs_and_hydro_storage(
+        eic, start=start - overlap, end=end + overlap
+    )
+    return normalise_reservoir(series)
+
+
 def fetch_api(
     cfg: AppConfig,
     datasets: Sequence[str],
     *,
     client: ApiClient | None = None,
     api_key: str = "",
+    force: bool = False,
     progress: Callable[[str], None] = print,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, dict[str, AreaResult]]:
-    """Query the ENTSO-E API and rebuild the ``entsoe_api`` raw cache.
+    """Query the ENTSO-E API into the ``entsoe_api`` raw cache, resuming where it stopped.
+
+    Interval datasets are requested and cached per UTC year, so an interrupted run skips the
+    years already cached. Timeouts, connection errors and server errors are retried with
+    exponential backoff.
 
     Parameters
     ----------
@@ -227,8 +253,12 @@ def fetch_api(
         API client; ``None`` creates one with the token from ``.env``.
     api_key : str
         Token used only to redact error messages when ``client`` is given.
+    force : bool
+        Request again the years already cached.
     progress : callable
         Receives progress messages.
+    sleep : callable
+        Pause between retries (injected in tests).
 
     Returns
     -------
@@ -245,58 +275,63 @@ def fetch_api(
         client = make_api_client(
             api_key, settings.retry_count, settings.retry_delay_s, settings.timeout_s
         )
+    limiter = RateLimiter(0.0)
     overlap = pd.Timedelta(days=settings.reservoir_overlap_days)
+
+    def request(dataset: str, area: str, start: pd.Timestamp, end: pd.Timestamp):
+        try:
+            return call_with_retries(
+                functools.partial(
+                    _query, client, dataset, data.areas[area].eic, start, end, overlap
+                ),
+                limiter,
+                settings.max_retries,
+                settings.backoff_s,
+                sleep,
+            )
+        except NoMatchingDataError:
+            return None
+        except Exception as exc:  # re-raise without the token in the message
+            raise ApiError(
+                f"{dataset}/{area} {start:%Y-%m-%d}: "
+                f"{redact(f'{type(exc).__name__}: {exc}', api_key)}"
+            ) from None
+
     summary: dict[str, dict[str, AreaResult]] = {}
     for dataset in datasets:
+        spec = SPECS[dataset]
         summary[dataset] = {}
         for area in api_areas(data, dataset):
-            eic = data.areas[area].eic
-            parts = []
-            for start, end in _windows(cfg, dataset):
-                try:
-                    if dataset == "generation":
-                        frame = normalise_generation(
-                            client.query_generation(eic, start=start, end=end)
-                        )
-                    elif dataset == "load":
-                        frame = normalise_series(
-                            client.query_load(eic, start=start, end=end), "value_mw"
-                        )
-                    elif dataset == "price":
-                        frame = normalise_series(
-                            client.query_day_ahead_prices(eic, start=start, end=end),
-                            "price_eur_mwh",
-                        ).assign(sequence="")
-                    else:  # overlapping windows: entsoe-py 0.8.1 drops year-boundary weeks
-                        frame = normalise_reservoir(
-                            client.query_aggregate_water_reservoirs_and_hydro_storage(
-                                eic, start=start - overlap, end=end + overlap
-                            )
-                        )
-                except NoMatchingDataError:
+            if dataset == "reservoir":
+                parts = [request(dataset, area, s, e) for s, e in _windows(cfg, dataset)]
+                parts = [p for p in parts if p is not None]
+                if not parts:
+                    progress(f"warning: no {dataset} data for {area}")
                     continue
-                except Exception as exc:  # re-raise without the token in the message
-                    raise ApiError(
-                        f"{dataset}/{area} {start:%Y-%m-%d}: "
-                        f"{redact(f'{type(exc).__name__}: {exc}', api_key)}"
-                    ) from None
-                if "start_utc" in frame:
-                    frame = frame[(frame["start_utc"] >= start) & (frame["start_utc"] < end)]
-                parts.append(frame)
+                frame, stats = drop_revisions(pd.concat(parts), spec.keys, spec.values)
+                write_dataset(frame, raw_dir, SOURCE, dataset, area, frame["iso_year"])
+                summary[dataset][area] = AreaResult(rows=len(frame), revisions=stats)
+                progress(f"{dataset}/{area}: {len(frame):,} weeks cached")
+                continue
+            rows = 0
+            for start, end in _windows(cfg, dataset):
+                path = partition_path(raw_dir, SOURCE, dataset, area, start.year)
+                if path.exists() and not force:
+                    rows += len(pd.read_parquet(path, columns=["start_utc"]))
+                    continue
+                frame = request(dataset, area, start, end)
+                if frame is None:
+                    continue
+                frame = frame[(frame["start_utc"] >= start) & (frame["start_utc"] < end)]
+                frame, _ = drop_revisions(frame, spec.keys, spec.values)
+                write_partition(frame, raw_dir, SOURCE, dataset, area, start.year)
+                rows += len(frame)
                 progress(f"{dataset}/{area} {start:%Y}: {len(frame):,} rows")
-            if not parts:
+            if rows == 0:
                 progress(f"warning: no {dataset} data for {area}")
                 continue
-            spec = SPECS[dataset]
-            frame, stats = drop_revisions(
-                pd.concat(parts, ignore_index=True), spec.keys, spec.values
-            )
-            years = frame["iso_year"] if dataset == "reservoir" else frame["start_utc"].dt.year
-            write_dataset(frame, raw_dir, SOURCE, dataset, area, years)
-            summary[dataset][area] = AreaResult(rows=len(frame), revisions=stats)
-            progress(
-                f"{dataset}/{area}: {len(frame):,} rows cached ({stats.duplicates} duplicates)"
-            )
+            summary[dataset][area] = AreaResult(rows=rows, revisions=RevisionStats(0, 0))
+            progress(f"{dataset}/{area}: {rows:,} rows cached")
     return summary
 
 

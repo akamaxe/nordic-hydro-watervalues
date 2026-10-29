@@ -49,7 +49,7 @@ class CredentialsError(RuntimeError):
 
 
 class RateLimitedError(RuntimeError):
-    """The File Library answered HTTP 429; retrying now would extend the ban."""
+    """The server answered HTTP 429 (rate limit); retrying now would extend the ban."""
 
 
 class LoginError(RuntimeError):
@@ -240,7 +240,7 @@ def call_with_retries[T](
     """Call ``func`` politely: rate-limited, with backoff on transient errors.
 
     Server errors (5xx), connection errors and timeouts are retried with exponential backoff.
-    HTTP 429 is never retried, because the File Library then extends a ten-minute ban.
+    HTTP 429 is never retried: retrying would extend the ban (ten minutes on the File Library).
 
     Raises
     ------
@@ -255,7 +255,8 @@ def call_with_retries[T](
             status = exc.response.status_code if exc.response is not None else None
             if status == HTTPStatus.TOO_MANY_REQUESTS:
                 raise RateLimitedError(
-                    "File Library rate limit reached (HTTP 429): wait ten minutes and resume"
+                    "rate limit reached (HTTP 429): wait before resuming "
+                    "(the File Library bans for ten minutes)"
                 ) from exc
             retryable = status is not None and status >= HTTPStatus.INTERNAL_SERVER_ERROR
             if not retryable or attempt == max_retries:

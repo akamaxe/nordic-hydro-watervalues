@@ -80,9 +80,11 @@ data:
     max_pumping_share: 0.01           # pumping consumption / hydro production
   api:                        # ENTSO-E REST API through entsoe-py
     env_file: .env            # holds ENTSOE_API_KEY (never committed)
-    retry_count: 3
+    retry_count: 3            # entsoe-py's own attempts on connection errors
     retry_delay_s: 10
     timeout_s: 120
+    max_retries: 4            # our retries on timeouts and server errors (exponential backoff)
+    backoff_s: 15
     reservoir_overlap_days: 21    # overlapping windows: entsoe-py 0.8.1 drops year-boundary weeks
   filelib:
     keyring_service: nordic-hydro-watervalues/entsoe-tp

@@ -6,6 +6,7 @@ import dotenv
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 from entsoe.exceptions import NoMatchingDataError
 
 from watervalues.config import load_config
@@ -143,6 +144,41 @@ def test_fetch_api_writes_a_continuous_cache(cfg, tmp_path) -> None:
     assert (steps == pd.Timedelta(days=7).value).all()  # no missing week
     first_window = next(c for c in client.calls if c[0] == "load")
     assert first_window[1] == pd.Timestamp("2014-12-29", tz="UTC")  # start of ISO 2015-W01
+
+
+class FlakyApi(FakeApi):
+    """Times out on the first request, then answers normally."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts = 1
+
+    def query_load(self, country_code, *, start, end):
+        if self.timeouts:
+            self.timeouts -= 1
+            raise requests.ReadTimeout("read timed out")
+        return super().query_load(country_code, start=start, end=end)
+
+
+def test_timeouts_are_retried(cfg, tmp_path) -> None:
+    pauses: list[float] = []
+    fetch_api(cfg, ["load"], client=FlakyApi(), progress=lambda _: None, sleep=pauses.append)
+    assert len(pauses) == 1
+    assert not read_dataset(tmp_path, "entsoe_api", "load", "SE").empty
+
+
+def test_cached_years_are_not_requested_again(cfg) -> None:
+    client = FakeApi()
+    fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
+    first_run = list(client.calls)
+    fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
+    second_run = client.calls[len(first_run) :]
+    # Only the windows without data (before the platform started) are asked again.
+    assert second_run and all(
+        end <= pd.Timestamp("2015-01-01", tz="UTC") for _, _, end in second_run
+    )
+    fetch_api(cfg, ["load"], client=client, force=True, progress=lambda _: None)
+    assert len(client.calls) == 2 * len(first_run) + len(second_run)
 
 
 def test_generation_is_queried_for_the_country_only(cfg) -> None:

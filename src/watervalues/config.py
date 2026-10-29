@@ -140,6 +140,8 @@ class ApiConfig(_Section):
     retry_count: int = Field(ge=1)  # attempts per request (entsoe-py makes none with 0)
     retry_delay_s: float = Field(ge=0)
     timeout_s: float = Field(gt=0)
+    max_retries: int = Field(ge=0)
+    backoff_s: float = Field(ge=0)
     reservoir_overlap_days: int = Field(ge=0)
 
 

@@ -51,7 +51,7 @@ def fetch(
         typer.Option("--dataset", "-d", help="generation, load, price or reservoir (repeatable)."),
     ] = None,
     source: SourceOption = None,
-    force: Annotated[bool, typer.Option(help="File Library: download again if cached.")] = False,
+    force: Annotated[bool, typer.Option(help="Request or download again what is cached.")] = False,
     config: ConfigOption = None,
 ) -> None:
     """Download the raw data and rebuild the normalised cache in data/raw/."""
@@ -64,7 +64,7 @@ def fetch(
         from watervalues.data.entsoe_api import ApiError, fetch_api
 
         try:
-            fetch_api(cfg, datasets, progress=typer.echo)
+            fetch_api(cfg, datasets, force=force, progress=typer.echo)
         except ApiError as exc:
             typer.echo(f"API request failed: {exc}", err=True)
             raise typer.Exit(code=1) from None

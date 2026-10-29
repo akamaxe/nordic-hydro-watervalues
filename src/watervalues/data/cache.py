@@ -17,6 +17,23 @@ def dataset_dir(raw_dir: Path, source: str, dataset: str, area: str) -> Path:
     return raw_dir / source / dataset / area
 
 
+def partition_path(raw_dir: Path, source: str, dataset: str, area: str, year: int) -> Path:
+    """Parquet file of one year of a dataset and area."""
+    return dataset_dir(raw_dir, source, dataset, area) / f"{int(year)}.parquet"
+
+
+def write_partition(
+    df: pd.DataFrame, raw_dir: Path, source: str, dataset: str, area: str, year: int
+) -> Path:
+    """Write (or replace) one yearly partition atomically."""
+    path = partition_path(raw_dir, source, dataset, area, year)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".parquet.tmp")
+    df.reset_index(drop=True).to_parquet(tmp, index=False)
+    tmp.replace(path)
+    return path
+
+
 def write_dataset(
     df: pd.DataFrame,
     raw_dir: Path,
