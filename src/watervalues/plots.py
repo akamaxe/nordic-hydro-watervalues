@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from cycler import cycler
 from matplotlib.axes import Axes
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from watervalues.data.aggregate import per_stage
 
@@ -178,4 +180,97 @@ def prices_se_de(weekly: pd.DataFrame, ax: Axes | None = None) -> Axes:
     ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
     ax.set_ylabel("Day-ahead price [EUR/MWh]")
     ax.legend(loc="upper left", ncols=2)
+    return ax
+
+
+def inflow_climatology(
+    scenarios: pd.DataFrame, highlight: Sequence[int] = (), ax: Axes | None = None
+) -> Axes:
+    """Weekly inflow per stage: range and mean over the years, plus highlighted years.
+
+    Parameters
+    ----------
+    scenarios : pandas.DataFrame
+        Scenario matrix (ISO years x stages 1-52) [GWh per 168-hour stage].
+    highlight : sequence of int
+        Years drawn in colour, in the fixed palette order (at most eight).
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    if len(highlight) > len(SERIES):
+        raise ValueError(f"at most {len(SERIES)} highlighted years")
+    ax = _axes(ax)
+    weeks = scenarios.columns.to_numpy()
+    ax.fill_between(
+        weeks,
+        scenarios.min(axis=0),
+        scenarios.max(axis=0),
+        color=CONTEXT,
+        alpha=0.6,
+        linewidth=0,
+        label="range over the years",
+        zorder=1,
+    )
+    ax.plot(weeks, scenarios.mean(axis=0), color=INK_SECONDARY, linestyle="--", label="mean")
+    for year, colour in zip(highlight, SERIES, strict=False):
+        ax.plot(weeks, scenarios.loc[year], color=colour, label=str(year), zorder=3)
+    ax.set_xlim(1, weeks.max())
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("ISO week (model stage)")
+    ax.set_ylabel("Inflow [GWh per week]")
+    ax.legend(loc="upper right")
+    return ax
+
+
+def annual_inflow(annual: pd.DataFrame, dry: int, wet: int, ax: Axes | None = None) -> Axes:
+    """Annual inflow (bars) and hydro production (markers) over 52 standard weeks [TWh].
+
+    Parameters
+    ----------
+    annual : pandas.DataFrame
+        Indexed by ISO year with ``inflow_model_twh`` and ``hydro_model_twh`` [TWh]
+        (see :func:`watervalues.inflow.annual_totals`).
+    dry, wet : int
+        Years drawn in colour (the wet one in the first palette slot, the dry one in the second).
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax)
+    years = annual.index.to_numpy()
+    colours = {wet: SERIES[0], dry: SERIES[1]}
+    ax.bar(
+        years,
+        annual["inflow_model_twh"],
+        color=[colours.get(year, CONTEXT) for year in years],
+        width=0.7,
+        zorder=2,
+    )
+    ax.plot(
+        years,
+        annual["hydro_model_twh"],
+        linestyle="none",
+        marker="o",
+        markersize=5,
+        color=INK,
+        zorder=3,
+    )
+    handles = [
+        Patch(color=SERIES[0], label=f"inflow, wettest year ({wet})"),
+        Patch(color=SERIES[1], label=f"inflow, driest year ({dry})"),
+        Patch(color=CONTEXT, label="inflow, other years"),
+        Line2D([], [], linestyle="none", marker="o", color=INK, label="hydro production"),
+    ]
+    ax.set_xticks(years)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("ISO year (52 standard weeks)")
+    ax.set_ylabel("Energy [TWh per year]")
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncols=2)
     return ax
