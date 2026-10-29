@@ -158,6 +158,7 @@ class DataConfig(_Section):
     source: Literal["filelib", "entsoe_api"]
     raw_dir: Path
     weekly_csv: Path
+    build_report: Path
     known_gaps_file: Path
     min_coverage: float = Field(gt=0, le=1)
     csv_float_format: str

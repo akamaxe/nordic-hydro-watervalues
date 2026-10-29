@@ -92,7 +92,36 @@ def build(
             raise typer.Exit(code=1)
     target = PROJECT_ROOT / cfg.data.weekly_csv
     write_weekly_csv(result.weekly, target, cfg.data.csv_float_format)
-    typer.echo(f"\nWrote {cfg.data.weekly_csv} ({len(result.weekly)} weeks)")
+    report = PROJECT_ROOT / cfg.data.build_report
+    report.write_text("\n".join(result.report) + "\n", encoding="utf-8", newline="\n")
+    typer.echo(f"\nWrote {cfg.data.weekly_csv} ({len(result.weekly)} weeks) and the report")
+
+
+@app.command()
+def notebooks() -> None:
+    """Execute every notebook in notebooks/ in order, in place, so outputs are up to date."""
+    import nbformat
+    from nbclient import NotebookClient
+
+    from watervalues.config import PROJECT_ROOT
+
+    folder = PROJECT_ROOT / "notebooks"
+    paths = sorted(folder.glob("[0-9][0-9]_*.ipynb"))
+    if not paths:
+        typer.echo("No notebooks found.")
+        raise typer.Exit(code=1)
+    for path in paths:
+        typer.echo(f"Executing {path.name} ...")
+        notebook = nbformat.read(path, as_version=4)
+        client = NotebookClient(
+            notebook,
+            timeout=600,
+            kernel_name="python3",
+            resources={"metadata": {"path": str(folder)}},
+        )
+        client.execute()
+        nbformat.write(notebook, path)
+    typer.echo(f"Executed {len(paths)} notebook(s).")
 
 
 @app.command()

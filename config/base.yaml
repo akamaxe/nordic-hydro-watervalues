@@ -30,6 +30,7 @@ data:
   source: filelib             # filelib (website login) | entsoe_api (REST API token)
   raw_dir: data/raw
   weekly_csv: data/processed/weekly_se.csv
+  build_report: data/processed/build_report.txt   # sanity report of the last build
   known_gaps_file: data/known_gaps.yaml
   min_coverage: 0.95          # share of a week's hours with data; below it the week is NaN
   csv_float_format: "%.3f"

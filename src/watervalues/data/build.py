@@ -227,28 +227,28 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
     return BuildResult(weekly, report, references, evidence, interpolated)
 
 
-def sanity_report(
-    cfg: AppConfig,
-    weekly: pd.DataFrame,
-    pumping_gwh: np.ndarray,
-    zone_load_gwh: np.ndarray,
-    references: pd.DataFrame,
-    evidence: AlignmentEvidence,
-    interpolated: list[pd.Timestamp],
-    raw_dir: Path,
-) -> list[str]:
-    """Human-readable checks of the weekly dataset (orders of magnitude, consistency, gaps)."""
-    sanity = cfg.data.sanity
+def derived_columns(weekly: pd.DataFrame) -> pd.DataFrame:
+    """Add residual demand, net import and implied inflow to the weekly dataset [GWh].
+
+    ``residual_demand = load - nuclear - wind - solar - other`` (what hydro and trade must
+    cover), ``net_import = residual_demand - hydro`` (negative when Sweden exports) and
+    ``inflow = storage_end - storage + hydro`` (energy balance, spill not observed).
+    """
     w = weekly.copy()
-    w["thermal_and_res_gwh"] = w[["nuclear_gwh", "wind_gwh", "solar_gwh", "other_gwh"]].sum(
-        axis=1, min_count=4
-    )
-    w["residual_demand_gwh"] = w["load_gwh"] - w["thermal_and_res_gwh"]
+    non_hydro = w[["nuclear_gwh", "wind_gwh", "solar_gwh", "other_gwh"]].sum(axis=1, min_count=4)
+    w["residual_demand_gwh"] = w["load_gwh"] - non_hydro
     w["net_import_gwh"] = w["residual_demand_gwh"] - w["hydro_gwh"]
     w["inflow_gwh"] = w["storage_end_gwh"] - w["storage_gwh"] + w["hydro_gwh"]
-    w["pumping_gwh"] = pumping_gwh
-    w["zone_load_gwh"] = zone_load_gwh
-    lines = ["Annual totals per ISO year [TWh]; storage [GWh]; hour-weighted mean prices [EUR/MWh]"]
+    return w
+
+
+def annual_summary(weekly: pd.DataFrame) -> pd.DataFrame:
+    """Annual totals per ISO year: energies [TWh], storage range [GWh], mean prices [EUR/MWh].
+
+    Prices are hour-weighted means of the weekly values; ``neg_inflow_wk`` counts weeks with
+    negative implied inflow.
+    """
+    w = derived_columns(weekly)
     rows = []
     for year, g in w.groupby("iso_year"):
 
@@ -280,7 +280,26 @@ def sanity_report(
                 "p_DE": mean_price("price_de_eur_mwh"),
             }
         )
-    table = pd.DataFrame(rows).set_index("year")
+    return pd.DataFrame(rows).set_index("year")
+
+
+def sanity_report(
+    cfg: AppConfig,
+    weekly: pd.DataFrame,
+    pumping_gwh: np.ndarray,
+    zone_load_gwh: np.ndarray,
+    references: pd.DataFrame,
+    evidence: AlignmentEvidence,
+    interpolated: list[pd.Timestamp],
+    raw_dir: Path,
+) -> list[str]:
+    """Human-readable checks of the weekly dataset (orders of magnitude, consistency, gaps)."""
+    sanity = cfg.data.sanity
+    w = derived_columns(weekly)
+    w["pumping_gwh"] = pumping_gwh
+    w["zone_load_gwh"] = zone_load_gwh
+    table = annual_summary(weekly)
+    lines = ["Annual totals per ISO year [TWh]; storage [GWh]; hour-weighted mean prices [EUR/MWh]"]
     lines.append(table.round(1).to_string())
 
     lines.append("\nPlausibility (warnings only; never used to tune anything)")
