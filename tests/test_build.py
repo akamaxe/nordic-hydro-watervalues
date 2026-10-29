@@ -6,12 +6,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from watervalues.config import load_config
-from watervalues.data.aggregate import hourly_energy
+from watervalues.config import ReferenceConfig, load_config
+from watervalues.data.aggregate import hourly_energy, per_stage
 from watervalues.data.build import (
+    BuildError,
     build_weekly,
     data_digest,
+    derived_columns,
     load_weekly,
+    reported_spans,
     sanity_report,
     unexplained_missing,
     unfolded_hydro,
@@ -211,3 +214,56 @@ def test_csv_round_trip_and_missing_value_check(synthetic, tmp_path) -> None:
     assert unexplained_missing(gappy, []) == ["hydro_gwh@2019-W01"]
     documented = [{"weeks": ["2019-W01"], "columns": ["hydro_gwh"], "reason": "test"}]
     assert unexplained_missing(gappy, documented) == []
+
+
+def with_references(cfg, *references: ReferenceConfig):
+    reservoir = cfg.data.reservoir.model_copy(update={"references": references})
+    return cfg.model_copy(update={"data": cfg.data.model_copy(update={"reservoir": reservoir})})
+
+
+def test_reference_weeks_must_be_cached_and_must_match(synthetic) -> None:
+    cfg, _, _ = synthetic
+    labels = read_dataset(cfg.data.raw_dir, "filelib", "reservoir", "SE")
+    week = labels[(labels["iso_year"] == 2019) & (labels["iso_week"] == 10)]
+    stored_gwh = float(week["stored_mwh"].iloc[0]) / 1000
+    build_weekly(
+        with_references(
+            cfg, ReferenceConfig(area="SE", iso_year=2019, iso_week=10, stored_gwh=stored_gwh)
+        )
+    )
+    with pytest.raises(BuildError, match="contradict"):
+        build_weekly(
+            with_references(
+                cfg,
+                ReferenceConfig(area="SE", iso_year=2019, iso_week=10, stored_gwh=stored_gwh + 50),
+            )
+        )
+    with pytest.raises(BuildError, match="not in the cached reservoir data"):
+        build_weekly(
+            with_references(
+                cfg, ReferenceConfig(area="SE", iso_year=2030, iso_week=10, stored_gwh=stored_gwh)
+            )
+        )
+
+
+def test_reported_spans_ignore_rows_without_a_value() -> None:
+    times = pd.date_range("2021-01-01", periods=4, freq="h", tz="UTC")
+    generation = pd.DataFrame(
+        {"psr_type": "B16", "start_utc": times, "value_mw": [np.nan, 5.0, 6.0, np.nan]}
+    )
+    spans = reported_spans(generation)
+    assert spans.loc["B16", "min"] == times[1]
+    assert spans.loc["B16", "max"] == times[2]
+
+
+def test_inflow_of_a_folded_week_is_computed_before_scaling(synthetic) -> None:
+    cfg, inflow, _ = synthetic
+    weekly = derived_columns(build_weekly(cfg).weekly)
+    stage = per_stage(weekly, ["hydro_gwh", "inflow_gwh"])
+    folded = weekly["hours"] == 336
+    np.testing.assert_allclose(
+        stage.loc[folded, "inflow_gwh"], (inflow[103] + inflow[104]) / 2, atol=1e-6
+    )
+    # Scaling first would leave a 336-hour storage change against 168 hours of production.
+    wrong = derived_columns(per_stage(weekly, ["hydro_gwh"]))
+    assert not np.allclose(wrong.loc[folded, "inflow_gwh"], stage.loc[folded, "inflow_gwh"])

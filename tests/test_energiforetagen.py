@@ -139,6 +139,7 @@ def test_compare_finds_end_of_week_labels_and_skips_bad_weeks(reservoir) -> None
     offsets = result.storage_offsets["median_abs_gwh"]
     assert offsets.loc[0] < 0.05 / 100 * MAX_GWH  # rounding of the printed filling
     assert min(offsets.loc[-1], offsets.loc[1]) > 10 * offsets.loc[0]
+    np.testing.assert_allclose(result.storage_by_year["implied_capacity_gwh"], MAX_GWH, rtol=1e-3)
     fit = result.inflow_fit["rmse_gwh"]
     assert fit.loc[("end_of_week", "all weeks")] == pytest.approx(0.0, abs=1e-6)
     assert fit.loc[("weekly_mean", "all weeks")] > 50

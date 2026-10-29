@@ -190,6 +190,7 @@ class DataConfig(_Section):
     de_price: DePriceConfig
     prices: PriceFilterConfig
     generation_categories: dict[str, tuple[str, ...]]
+    partial_period_types: tuple[str, ...] = ()  # zero outside their reporting span
     reservoir: ReservoirDataConfig
     sanity: SanityConfig
     api: ApiConfig
@@ -210,7 +211,7 @@ class DataConfig(_Section):
         if missing:
             raise ValueError(f"areas used but not defined in data.areas: {missing}")
         codes = [code for codes in self.generation_categories.values() for code in codes]
-        unknown = sorted(set(codes) - set(KNOWN_PSR_TYPES))
+        unknown = sorted((set(codes) | set(self.partial_period_types)) - set(KNOWN_PSR_TYPES))
         if unknown:
             raise ValueError(f"unknown production types in generation_categories: {unknown}")
         if len(codes) != len(set(codes)):

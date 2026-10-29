@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from watervalues.config import PROJECT_ROOT, AppConfig, DataConfig
 from watervalues.data.aggregate import ALLOWED_RESOLUTIONS_MIN, RevisionStats, drop_revisions
 from watervalues.data.cache import partition_path, write_dataset, write_partition
+from watervalues.data.calendar import iso_week_start
 from watervalues.data.fetch import SPECS, AreaResult, dataset_areas, period_bounds
 from watervalues.data.filelib import CredentialsError, RateLimiter, call_with_retries
 from watervalues.data.schema import psr_code
@@ -37,6 +38,7 @@ API_KEY_ENV = "ENTSOE_API_KEY"
 _HALF_DAY = pd.Timedelta(hours=12)
 WEEK_SPAN = pd.Timedelta(days=7)
 _REQUEST_MARGIN = pd.Timedelta(days=1)  # neighbours for resolution inference at window edges
+_LAST_INTERVAL = pd.Timedelta(hours=1)  # a cached year is complete if it reaches this close
 _REPORT_TZ = "Europe/Stockholm"  # reservoir weeks are published in Swedish local time
 _GENERATION, _CONSUMPTION = "Actual Aggregated", "Actual Consumption"
 
@@ -125,19 +127,29 @@ def make_api_client(
 def infer_resolution_min(index: pd.DatetimeIndex) -> np.ndarray:
     """Interval length of each timestamp [min], from the spacing of a sorted index.
 
-    Each point takes the step to the next one when it is a valid resolution, else the step from
-    the previous one (the last point before a gap); isolated points take the most common step.
+    A step counts only if it is a valid resolution and the point is aligned to it. A point takes
+    the step to the next one when the next point continues with the same step (a stable block,
+    e.g. the first hour after a switch from 15 to 60 minutes); otherwise it takes the smaller of
+    its steps to the neighbours, so that one missing quarter-hour does not turn its neighbour
+    into a 30-minute interval. Isolated points take the most common step.
     """
     if len(index) == 0:
         return np.array([], dtype=np.int64)
     nanoseconds = pd.DatetimeIndex(index).as_unit("ns").asi8  # pandas 3 may store us or s
-    steps = np.diff(nanoseconds) / pd.Timedelta(minutes=1).value
+    minutes = nanoseconds // pd.Timedelta(minutes=1).value
+    steps = np.diff(minutes).astype(float)
     forward = np.append(steps, np.nan)
     backward = np.insert(steps, 0, np.nan)
-    allowed = np.isin(forward, ALLOWED_RESOLUTIONS_MIN)
-    result = np.where(
-        allowed, forward, np.where(np.isin(backward, ALLOWED_RESOLUTIONS_MIN), backward, np.nan)
-    )
+
+    def usable(step: np.ndarray) -> np.ndarray:
+        valid = np.isin(step, ALLOWED_RESOLUTIONS_MIN)
+        aligned = np.zeros(len(step), dtype=bool)
+        aligned[valid] = minutes[valid] % step[valid].astype(np.int64) == 0
+        return np.where(valid & aligned, step, np.nan)
+
+    ahead, behind = usable(forward), usable(backward)
+    stable = ~np.isnan(ahead) & (forward == np.append(forward[1:], np.nan))
+    result = np.where(stable, ahead, np.fmin(ahead, behind))
     if np.isnan(result).any():
         valid = steps[np.isin(steps, ALLOWED_RESOLUTIONS_MIN)]
         if valid.size == 0:
@@ -258,13 +270,21 @@ def api_areas(data: DataConfig, dataset: str) -> list[str]:
 
 
 def _windows(cfg: AppConfig, dataset: str) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    """Request windows in UTC: calendar years covering the needed period."""
-    (first_year, first_month), (last_year, _) = period_bounds(cfg, dataset)
-    start = pd.Timestamp(year=first_year, month=first_month, day=1, tz="UTC")
-    if dataset != "reservoir":
-        # The first ISO week of the period starts on the last Monday of December.
-        start = pd.Timestamp(date.fromisocalendar(first_year + 1, 1, 1), tz="UTC")
-    end = pd.Timestamp(year=last_year + 1, month=1, day=1, tz="UTC")
+    """Request windows in UTC: calendar years covering the needed period.
+
+    Interval data starts with the first ISO week of the period (which can begin in December)
+    and ends with the last one (which can end in January, in a short final window).
+    """
+    if dataset == "reservoir":
+        (first_year, first_month), (last_year, _) = period_bounds(cfg, dataset)
+        start = pd.Timestamp(year=first_year, month=first_month, day=1, tz="UTC")
+        end = pd.Timestamp(year=last_year + 1, month=1, day=1, tz="UTC")
+    else:
+        first, last = cfg.period.first_iso_year, cfg.period.last_iso_year
+        start = iso_week_start(first, 1)
+        end = max(
+            pd.Timestamp(year=last + 1, month=1, day=1, tz="UTC"), iso_week_start(last + 1, 1)
+        )
     edges = [start, *pd.date_range(start, end, freq="YS", inclusive="neither"), end]
     return list(itertools.pairwise(edges))
 
@@ -302,8 +322,8 @@ def fetch_api(
     """Query the ENTSO-E API into the ``entsoe_api`` raw cache, resuming where it stopped.
 
     Interval datasets are requested and cached per UTC year, so an interrupted run skips the
-    years already cached. Timeouts, connection errors and server errors are retried with
-    exponential backoff.
+    years already cached in full (a year cached before its data were complete is requested
+    again). Timeouts, connection errors and server errors are retried with exponential backoff.
 
     Parameters
     ----------
@@ -376,8 +396,10 @@ def fetch_api(
             for start, end in _windows(cfg, dataset):
                 path = partition_path(raw_dir, SOURCE, dataset, area, start.year)
                 if path.exists() and not force:
-                    rows += len(pd.read_parquet(path, columns=["start_utc"]))
-                    continue
+                    cached = pd.read_parquet(path, columns=["start_utc"])["start_utc"]
+                    if cached.max() >= end - _LAST_INTERVAL:  # else fetched before complete
+                        rows += len(cached)
+                        continue
                 frame = request(dataset, area, start, end)
                 if frame is None:
                     continue

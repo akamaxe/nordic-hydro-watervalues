@@ -232,7 +232,7 @@ def test_generation_categories_and_structural_zeros() -> None:
     solar = intervals(WEEK1 + pd.Timedelta(days=14), 168, 60, 10.0, psr_type="B16")
     other = intervals(WEEK1, 168 * 3, 60, 20.0, psr_type="B20")
     hourly = hourly_energy(pd.concat([hydro, nuclear, solar, other]), by=("psr_type",))
-    weekly = weekly_generation(hourly, CAL_2025, CATEGORIES, KNOWN, MIN_COVERAGE)
+    weekly = weekly_generation(hourly, CAL_2025, CATEGORIES, KNOWN, MIN_COVERAGE, ["B16"])
     assert weekly.loc[0, "hydro_gwh"] == pytest.approx(168.0)
     assert weekly.loc[0, "nuclear_gwh"] == pytest.approx(84.0)
     assert weekly.loc[0, "solar_gwh"] == 0.0
@@ -255,6 +255,17 @@ def test_gap_inside_a_reporting_period_is_not_a_zero() -> None:
     weekly = weekly_generation(hourly, CAL_2025, CATEGORIES, KNOWN, MIN_COVERAGE)
     assert np.isnan(weekly.loc[1, "nuclear_gwh"])
     assert weekly.loc[1, "hydro_gwh"] == pytest.approx(168.0)
+
+
+def test_only_listed_types_count_as_zero_outside_their_reporting_period() -> None:
+    # Nuclear stops one week before the end of the data (say, published late): missing.
+    hydro = intervals(WEEK1, 168 * 3, 60, 1000.0, psr_type="B12")
+    nuclear = intervals(WEEK1, 168 * 2, 60, 500.0, psr_type="B14")
+    hourly = hourly_energy(pd.concat([hydro, nuclear]), by=("psr_type",))
+    weekly = weekly_generation(hourly, CAL_2025, CATEGORIES, KNOWN, MIN_COVERAGE)
+    assert np.isnan(weekly.loc[2, "nuclear_gwh"])
+    listed = weekly_generation(hourly, CAL_2025, CATEGORIES, KNOWN, MIN_COVERAGE, ["B14"])
+    assert listed.loc[2, "nuclear_gwh"] == 0.0  # a discontinued type, declared as such
 
 
 def test_unknown_production_type_is_rejected() -> None:

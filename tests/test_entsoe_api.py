@@ -177,7 +177,9 @@ def test_fetch_api_writes_a_continuous_cache(cfg, tmp_path) -> None:
     assert load["start_utc"].min() == FakeApi.DATA_START
     assert (load["resolution_min"] == 60).all()
     assert not load["start_utc"].duplicated().any()  # margins and inclusive ends trimmed
-    assert load["start_utc"].max() == pd.Timestamp("2016-12-31 23:00", tz="UTC")
+    # ISO 2016-W52 ends on Monday 2017-01-02: a short final window covers its last day.
+    assert load["start_utc"].max() == pd.Timestamp("2017-01-01 23:00", tz="UTC")
+    assert len(pd.read_parquet(tmp_path / "entsoe_api/load/SE/2017.parquet")) == 24
     prices = read_dataset(tmp_path, "entsoe_api", "price", "SE1")
     assert (prices["sequence"] == "").all()
     reservoir = read_dataset(tmp_path, "entsoe_api", "reservoir", "SE")
@@ -189,6 +191,47 @@ def test_fetch_api_writes_a_continuous_cache(cfg, tmp_path) -> None:
     first_window = next(c for c in client.calls if c[0] == "load")
     # Start of ISO 2015-W01 (2014-12-29) minus the one-day request margin.
     assert first_window[1] == pd.Timestamp("2014-12-28", tz="UTC")
+
+
+def test_a_year_cached_before_it_was_complete_is_requested_again(cfg, tmp_path) -> None:
+    fetch_api(cfg, ["load"], client=FakeApi(), progress=lambda _: None)
+    path = tmp_path / "entsoe_api/load/SE/2016.parquet"
+    complete = pd.read_parquet(path)
+    complete[complete["start_utc"] < "2016-07-01"].to_parquet(path, index=False)  # half a year
+    client = FakeApi()
+    fetch_api(cfg, ["load"], client=client, progress=lambda _: None)
+    requested = [c[1].year for c in client.calls]
+    assert requested == [2015]  # 2016 - 1 day margin: only the incomplete year again
+    assert len(pd.read_parquet(path)) == len(complete)
+
+
+def test_resolution_ignores_a_missing_quarter_hour_and_follows_a_switch_to_hours() -> None:
+    def minutes(*times: str) -> list[int]:
+        return infer_resolution_min(pd.DatetimeIndex(list(times), tz="UTC")).tolist()
+
+    # :30 missing: the :15 value is not a 30-minute interval (it would not be aligned).
+    assert minutes("00:00", "00:15", "00:45", "01:00", "01:15") == [15] * 5
+    # :15 missing: the :00 value still covers 15 minutes, not 30.
+    assert (
+        minutes(
+            "2025-10-05 23:45",
+            "2025-10-06 00:00",
+            "2025-10-06 00:30",
+            "2025-10-06 00:45",
+            "2025-10-06 01:00",
+        )
+        == [15] * 5
+    )
+    # A switch from 15 to 60 minutes: the first hourly value starts a stable block.
+    assert minutes("00:00", "00:15", "00:30", "00:45", "01:00", "02:00", "03:00") == [
+        15,
+        15,
+        15,
+        15,
+        60,
+        60,
+        60,
+    ]
 
 
 class FlakyApi(FakeApi):

@@ -355,13 +355,15 @@ def weekly_generation(
     categories: Mapping[str, Sequence[str]],
     known_psr_types: Sequence[str],
     min_coverage: float,
+    partial_period_types: Sequence[str] = (),
 ) -> pd.DataFrame:
     """Weekly generation per technology category.
 
-    A production type that is absent for a whole bin counts as zero only when the area reported
-    other types in that bin and the bin lies outside the type's reporting period (for example
-    solar before its first report). Any other gap follows the coverage rule, and a category is
-    NaN when any of its production types is NaN.
+    A production type listed in ``partial_period_types`` that is absent for a whole bin counts
+    as zero when the area reported other types in that bin and the bin lies outside the type's
+    reporting period (for example solar before its first report). Any other gap follows the
+    coverage rule, so a type that is not listed and stops early (say, nuclear missing in the last
+    week of the cache) is missing, not zero. A category is NaN when any of its types is NaN.
 
     Parameters
     ----------
@@ -375,6 +377,8 @@ def weekly_generation(
         Every valid PSR code; an unknown code in the data is an error.
     min_coverage : float
         Minimum share of the bin's hours with data (0–1].
+    partial_period_types : sequence of str
+        PSR codes reported only during part of the period, which count as zero outside it.
 
     Returns
     -------
@@ -399,8 +403,9 @@ def weekly_generation(
     week_start = pd.DatetimeIndex(calendar["week_start"])[positions]
     week_end = pd.DatetimeIndex(calendar["week_end"])[positions]
     outside_span = np.asarray((week_end <= first_hour) | (week_start > last_hour))
+    partial = np.isin(psr, list(partial_period_types))
     energy = weekly["energy_gwh"].to_numpy().copy()
-    structural_zero = (weekly["coverage"].to_numpy() == 0) & area_reported & outside_span
+    structural_zero = (weekly["coverage"].to_numpy() == 0) & area_reported & outside_span & partial
     energy[structural_zero] = 0.0
 
     category = [category_of.get(code, OTHER_CATEGORY) for code in psr]
@@ -428,7 +433,10 @@ def per_stage(
     """Normalise weekly energies to a standard stage length.
 
     A folded week 52 (``hours = 336``) becomes an average 168-hour week, consistent with the
-    weekly bounds of the SDP. Storage levels and prices are left unchanged.
+    weekly bounds of the SDP. Storage levels and prices are left unchanged, so the storage change
+    of a folded row still spans 336 hours: compute flows that come from the energy balance
+    (``inflow = storage_end - storage + hydro``) on the unscaled rows first and pass them here
+    with the other energies. Computing them after this call breaks the balance.
 
     Parameters
     ----------

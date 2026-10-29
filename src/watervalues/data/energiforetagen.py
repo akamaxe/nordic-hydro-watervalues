@@ -57,7 +57,7 @@ class Validation:
     not_reported: list[str]  # weeks with a zero filling or inflow (not filled in yet)
     entry_errors: list[str]  # weeks with a filling above 100 % (e.g. a lost decimal point)
     storage_offsets: pd.DataFrame  # per offset k: median and 90th percentile of |diff|, n
-    storage_by_year: pd.DataFrame  # offset 0: median and max |diff| per ISO year
+    storage_by_year: pd.DataFrame  # offset 0: |diff| and the capacity implied by the filling
     hydro_lag_corr: dict[int, float]  # correlation with ENTSO-E hydro of week w + k
     hydro_ratio_by_year: pd.Series  # ENTSO-E / Energiföretagen hydro production
     inflow_fit: pd.DataFrame  # per convention and window: corr, RMSE, bias, n
@@ -240,9 +240,13 @@ def compare(
             f"p{_TAIL_PERCENTILE}_abs_gwh": float(np.percentile(diff[ok], _TAIL_PERCENTILE)),
             "n": int(ok.sum()),
         }
-    same_week = pd.Series(np.abs(storage - published_gwh.reindex(t).to_numpy()), index=ef.index)
+    same_label = published_gwh.reindex(t).to_numpy()
+    same_week = pd.Series(np.abs(storage - same_label), index=ef.index)
     by_year = same_week.groupby(years).agg(["median", "max"])
     by_year.columns = ["median_abs_gwh", "max_abs_gwh"]
+    # The ENTSO-E value divided by the filling share: the capacity the percentages refer to.
+    implied = pd.Series(same_label / (fill.to_numpy() / _PERCENT), index=ef.index)
+    by_year["implied_capacity_gwh"] = implied.groupby(years).median()
 
     hydro_ef = ef["hydro_gwh"].to_numpy()
     lag_corr = {

@@ -57,6 +57,10 @@ data:
     nuclear: [B14]
     wind: [B18, B19]
     solar: [B16]
+  # Types that ENTSO-E reports for Sweden only during part of the period (the build report lists
+  # each type's first and last interval): outside that span they count as zero. Any other type
+  # that is absent for a week makes its category missing, e.g. nuclear absent at the cache end.
+  partial_period_types: [B04, B13, B16]
   reservoir:
     area: SE
     # Value published for ISO week w = storage at the END of week w. Verified: ENTSO-E 2026-W43

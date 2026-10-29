@@ -132,6 +132,10 @@ def test_period_bounds_cover_the_first_iso_week_and_references() -> None:
     cfg = load_config()
     assert period_bounds(cfg, "load") == ((2014, 12), (2025, 12))
     assert period_bounds(cfg, "reservoir") == ((2014, 1), (2026, 12))
+    longer = cfg.model_copy(
+        update={"period": cfg.period.model_copy(update={"last_iso_year": 2026})}
+    )
+    assert period_bounds(longer, "load") == ((2014, 12), (2027, 1))  # 2026-W53 ends 2027-01-04
     assert dataset_areas(cfg.data, "price") == ["SE1", "SE2", "SE3", "SE4", "DE_AT_LU", "DE_LU"]
 
 

@@ -116,8 +116,13 @@ def check_reservoir_convention(
         [ReferencePoint(r.area, r.iso_year, r.iso_week, r.stored_gwh) for r in res.references],
     )
     if not references.empty:
-        residual = references[configured.value].dropna().abs()
-        if (residual > res.reference_tolerance_gwh).any():
+        residual = references[configured.value]
+        if residual.isna().any():
+            raise BuildError(
+                f"reference weeks are not in the cached reservoir data ({configured.value}):\n"
+                f"{references.to_string(index=False)}"
+            )
+        if (residual.abs() > res.reference_tolerance_gwh).any():
             raise BuildError(
                 f"reservoir values contradict the external references under {configured.value}:\n"
                 f"{references.to_string(index=False)}"
@@ -162,7 +167,12 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
     hourly_generation = hourly_energy(generation, "value_mw", by=("psr_type",))
     categories = data.generation_categories
     by_category = weekly_generation(
-        hourly_generation, calendar, categories, KNOWN_PSR_TYPES, coverage
+        hourly_generation,
+        calendar,
+        categories,
+        KNOWN_PSR_TYPES,
+        coverage,
+        data.partial_period_types,
     )
     pumping_rows = generation[generation["psr_type"] == PUMPED_STORAGE_PSR]
     pumping_gwh = (
@@ -236,7 +246,7 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
     provenance = (
         f"source {source}: {len(frames)} cached series, data digest {data_digest(frames)[:16]}"
     )
-    reported_types = generation.groupby("psr_type")["start_utc"].agg(["min", "max"])
+    reported_types = reported_spans(generation)
     report = sanity_report(
         cfg,
         weekly,
@@ -250,6 +260,24 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
         provenance,
     )
     return BuildResult(weekly, report, references, evidence, interpolated)
+
+
+def reported_spans(generation: pd.DataFrame) -> pd.DataFrame:
+    """First and last interval start with a value, per production type.
+
+    Parameters
+    ----------
+    generation : pandas.DataFrame
+        Normalised generation frame (``psr_type``, ``start_utc``, ``value_mw`` [MW]).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``psr_type`` with columns ``min`` and ``max`` (UTC); rows without a value
+        (NaN) do not count as reported.
+    """
+    reported = generation.dropna(subset=["value_mw"])
+    return reported.groupby("psr_type")["start_utc"].agg(["min", "max"])
 
 
 def unfolded_hydro(cfg: AppConfig, hourly_generation: pd.DataFrame) -> pd.Series:
@@ -274,6 +302,7 @@ def unfolded_hydro(cfg: AppConfig, hourly_generation: pd.DataFrame) -> pd.Series
         cfg.data.generation_categories,
         KNOWN_PSR_TYPES,
         cfg.data.min_coverage,
+        cfg.data.partial_period_types,
     )["hydro_gwh"]
     return pd.Series(hydro.to_numpy(), index=pd.DatetimeIndex(unfolded["week_start"]))
 
@@ -304,6 +333,8 @@ def derived_columns(weekly: pd.DataFrame) -> pd.DataFrame:
     ``residual_demand = load - nuclear - wind - solar - other`` (what hydro and trade must
     cover), ``net_import = residual_demand - hydro`` (negative when Sweden exports) and
     ``inflow = storage_end - storage + hydro`` (energy balance, spill not observed).
+    Call it on unscaled rows: a folded week's storage change spans 336 hours, so the balance only
+    holds before :func:`~watervalues.data.aggregate.per_stage` (scale ``inflow_gwh`` after).
     """
     w = weekly.copy()
     non_hydro = w[["nuclear_gwh", "wind_gwh", "solar_gwh", "other_gwh"]].sum(axis=1, min_count=4)

@@ -13,6 +13,7 @@ from watervalues.config import PROJECT_ROOT, AppConfig, DataConfig
 from watervalues.data import exports
 from watervalues.data.aggregate import RevisionStats, drop_revisions
 from watervalues.data.cache import write_dataset
+from watervalues.data.calendar import iso_week_start
 from watervalues.data.filelib import (
     FileClient,
     RateLimiter,
@@ -70,15 +71,16 @@ def dataset_areas(data: DataConfig, dataset: str) -> list[str]:
 def period_bounds(cfg: AppConfig, dataset: str) -> tuple[tuple[int, int], tuple[int, int]]:
     """First and last (year, month) of the exports needed for a dataset.
 
-    The first ISO week of a year can start in December of the previous year. Reservoir values
-    are also needed for the week before the first one (start-of-week storage) and for the year
-    of the external reference points.
+    The first ISO week of a year can start in December of the previous year, and the last one
+    can end in January of the next. Reservoir values are also needed for the week before the
+    first one (start-of-week storage) and for the year of the external reference points.
     """
     first, last = cfg.period.first_iso_year, cfg.period.last_iso_year
     if dataset == "reservoir":
         reference_years = [ref.iso_year for ref in cfg.data.reservoir.references]
         return (first - 1, 1), (max([last + 1, *reference_years]), _DEC)
-    return (first - 1, _DEC), (last, _DEC)
+    last_day = iso_week_start(last + 1, 1) - pd.Timedelta(days=1)
+    return (first - 1, _DEC), max((last, _DEC), (last_day.year, last_day.month))
 
 
 def _parse(dataset: str, rows: pd.DataFrame, data: DataConfig) -> pd.DataFrame:
