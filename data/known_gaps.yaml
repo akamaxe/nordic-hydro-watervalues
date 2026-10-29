@@ -1,6 +1,6 @@
 # Missing values (NaN) of data/processed/weekly_se.csv that are explained.
-# `watervalues build --strict` fails on any NaN cell not listed here. How the model treats
-# these weeks is decided in M2; nothing is imputed in the weekly dataset.
+# `watervalues build --strict` fails on any NaN cell not listed here. Nothing is imputed in the
+# weekly dataset; how the model treats these weeks is described in data/README.md (Known gaps).
 
 - weeks: [2015-W01]
   columns: [hydro_gwh, load_gwh, nuclear_gwh, wind_gwh, solar_gwh, other_gwh, price_de_eur_mwh]
