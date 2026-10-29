@@ -78,6 +78,12 @@ data:
     storage_capacity_ref_gwh: 33700   # Energiföretagen: 100 % = 33.7 TWh
     zone_load_rel_tol: 0.02           # |sum of SE1-SE4 load / SE load - 1|
     max_pumping_share: 0.01           # pumping consumption / hydro production
+  api:                        # ENTSO-E REST API through entsoe-py
+    env_file: .env            # holds ENTSOE_API_KEY (never committed)
+    retry_count: 3
+    retry_delay_s: 10
+    timeout_s: 120
+    reservoir_overlap_days: 21    # overlapping windows: entsoe-py 0.8.1 drops year-boundary weeks
   filelib:
     keyring_service: nordic-hydro-watervalues/entsoe-tp
     token_url: https://keycloak.tp.entsoe.eu/realms/tp/protocol/openid-connect/token

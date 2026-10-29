@@ -133,6 +133,16 @@ class SanityConfig(_Section):
     max_pumping_share: float = Field(ge=0)
 
 
+class ApiConfig(_Section):
+    """ENTSO-E REST API access through entsoe-py."""
+
+    env_file: Path
+    retry_count: int = Field(ge=1)  # attempts per request (entsoe-py makes none with 0)
+    retry_delay_s: float = Field(ge=0)
+    timeout_s: float = Field(gt=0)
+    reservoir_overlap_days: int = Field(ge=0)
+
+
 class FileLibConfig(_Section):
     """ENTSO-E File Library access (website login, no API token)."""
 
@@ -171,6 +181,7 @@ class DataConfig(_Section):
     generation_categories: dict[str, tuple[str, ...]]
     reservoir: ReservoirDataConfig
     sanity: SanityConfig
+    api: ApiConfig
     filelib: FileLibConfig
 
     @model_validator(mode="after")

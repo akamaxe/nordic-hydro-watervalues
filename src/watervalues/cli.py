@@ -38,24 +38,57 @@ def info(config: ConfigOption = None) -> None:
     typer.echo(cfg.model_dump_json(indent=2))
 
 
+SourceOption = Annotated[
+    str | None,
+    typer.Option("--source", "-s", help="entsoe_api or filelib (default: data.source in config)."),
+]
+
+
 @app.command()
 def fetch(
     dataset: Annotated[
         list[str] | None,
         typer.Option("--dataset", "-d", help="generation, load, price or reservoir (repeatable)."),
     ] = None,
-    force: Annotated[bool, typer.Option(help="Download again even if cached.")] = False,
+    source: SourceOption = None,
+    force: Annotated[bool, typer.Option(help="File Library: download again if cached.")] = False,
     config: ConfigOption = None,
 ) -> None:
     """Download the raw data and rebuild the normalised cache in data/raw/."""
     from watervalues.config import DATASETS
-    from watervalues.data.fetch import fetch_filelib
 
     cfg = load_config(config)
-    if cfg.data.source != "filelib":
-        typer.echo("Only the File Library source is available until the API token arrives.")
+    chosen = source or cfg.data.source
+    datasets = dataset or list(DATASETS)
+    if chosen == "entsoe_api":
+        from watervalues.data.entsoe_api import ApiError, fetch_api
+
+        try:
+            fetch_api(cfg, datasets, progress=typer.echo)
+        except ApiError as exc:
+            typer.echo(f"API request failed: {exc}", err=True)
+            raise typer.Exit(code=1) from None
+    elif chosen == "filelib":
+        from watervalues.data.fetch import fetch_filelib
+
+        fetch_filelib(cfg, datasets, force=force, progress=typer.echo)
+    else:
+        typer.echo(f"Unknown source {chosen!r}: use entsoe_api or filelib.", err=True)
         raise typer.Exit(code=1)
-    fetch_filelib(cfg, dataset or list(DATASETS), force=force, progress=typer.echo)
+
+
+@app.command(name="check-api")
+def check_api_command(config: ConfigOption = None) -> None:
+    """Verify the ENTSO-E API token with one small request (the token is never shown)."""
+    from watervalues.data.entsoe_api import ApiError, check_api
+    from watervalues.data.filelib import CredentialsError
+
+    try:
+        received = check_api(load_config(config))
+    except (ApiError, CredentialsError) as exc:
+        typer.echo(f"API check failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(f"API token OK: {received} day-ahead prices received.")
 
 
 @app.command()
@@ -63,6 +96,7 @@ def build(
     strict: Annotated[
         bool, typer.Option(help="Fail on missing values not listed in data/known_gaps.yaml.")
     ] = False,
+    source: SourceOption = None,
     config: ConfigOption = None,
 ) -> None:
     """Build data/processed/weekly_se.csv from the raw cache and print the sanity report."""
@@ -77,7 +111,7 @@ def build(
 
     cfg = load_config(config)
     try:
-        result = build_weekly(cfg, cfg.data.source)
+        result = build_weekly(cfg, source or cfg.data.source)
     except BuildError as exc:
         typer.echo(f"Build stopped: {exc}", err=True)
         raise typer.Exit(code=1) from None

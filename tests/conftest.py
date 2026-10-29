@@ -31,3 +31,7 @@ def _no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(keyring, "get_credential", lambda service, username: None)
     monkeypatch.setattr(keyring, "get_password", lambda service, username: None)
+    # Never read the project's real .env (it holds the API token).
+    from watervalues.data import entsoe_api
+
+    monkeypatch.setattr(entsoe_api, "load_dotenv", lambda *args, **kwargs: False)
