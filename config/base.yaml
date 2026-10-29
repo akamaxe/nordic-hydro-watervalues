@@ -27,7 +27,7 @@ scenarios:
   de_price_levels_eur_mwh: [50, 80, 120]
 
 data:
-  source: filelib             # filelib (website login) | entsoe_api (REST API token)
+  source: entsoe_api          # entsoe_api (REST API token) | filelib (website login)
   raw_dir: data/raw
   weekly_csv: data/processed/weekly_se.csv
   build_report: data/processed/build_report.txt   # sanity report of the last build
