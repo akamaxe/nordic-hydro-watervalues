@@ -19,11 +19,12 @@
 - weeks: [2021-W50]
   columns: [solar_gwh, other_gwh]
   reason: >-
-    Solar (B16), fossil gas (B04) and marine (B13, always reported as zero) cover only part of
-    the week, so the solar and "other" categories are below data.min_coverage.
+    Solar (B16), fossil gas (B04) and marine (B13, always reported as zero) are first reported
+    on 2021-12-14 23:00 UTC, inside this week, so they cover less of it than data.min_coverage
+    and the solar and "other" categories are missing.
 
 - weeks: [2022-W06]
   columns: [other_gwh]
   reason: >-
-    Marine (B13), always reported as zero for Sweden, covers only part of the week, which makes
-    the "other" category incomplete.
+    Marine (B13), always reported as zero for Sweden, is last reported on 2022-02-13 and has
+    gaps in this week, which makes the "other" category incomplete.

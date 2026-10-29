@@ -23,11 +23,11 @@ Plausibility (warnings only; never used to tune anything)
   SE price between the zones' load-weighted prices: 571 of 571 weeks
 
 Production types reported for SE (first and last interval, UTC)
-  B04 Fossil Gas: 2021-01-01 00:00 to 2025-12-31 23:45
+  B04 Fossil Gas: 2021-12-14 23:00 to 2025-12-31 23:45
   B12 Hydro Water Reservoir: 2015-01-04 23:00 to 2025-12-31 23:45
-  B13 Marine: 2021-01-01 00:00 to 2022-12-31 23:00
+  B13 Marine: 2021-12-14 23:00 to 2022-02-13 22:00
   B14 Nuclear: 2015-01-04 23:00 to 2025-12-31 23:45
-  B16 Solar: 2021-01-01 00:00 to 2025-12-31 23:45
+  B16 Solar: 2021-12-14 23:00 to 2025-12-31 23:45
   B19 Wind Onshore: 2015-01-04 23:00 to 2025-12-31 23:45
   B20 Other: 2015-01-04 23:00 to 2025-12-31 23:45
 

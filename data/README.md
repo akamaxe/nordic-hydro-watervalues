@@ -81,11 +81,13 @@ publication.
 
 **Generation categories** (ENTSO-E production-type codes):
 hydro = B10 + B11 + B12 (gross output; pumping consumption is reported, not subtracted),
-nuclear = B14, wind = B18 + B19, solar = B16, other = every remaining type. A type that the area
-did not report at all in a week counts as zero only if other types were reported that week and
-the type was outside its reporting period (e.g. solar before its first report). For Sweden,
-ENTSO-E reports all hydro as water reservoir (B12), and fossil gas (B04), marine (B13) and solar
-(B16) only from 2021; the build report lists the first and last interval of every type.
+nuclear = B14, wind = B18 + B19, solar = B16, other = every remaining type. For Sweden, ENTSO-E
+reports all hydro as water reservoir (B12); fossil gas (B04), marine (B13) and solar (B16) start
+on 2021-12-14 23:00 UTC, and marine stops on 2022-02-13 (the build report lists the first and
+last interval of every type). These types are declared in `data.partial_period_types`: a week
+outside their reporting span counts as zero when other types were reported. Any other type
+that is absent for a week makes its category missing, so a major type that is published late
+can never turn into a silent zero.
 
 **Load.** `load_gwh` is the Swedish country load; SE1–SE4 loads serve as price weights and as a
 cross-check (their sum is compared with the country load in the build report).
@@ -114,8 +116,11 @@ made:
    the end of the week (74.7 % and 75.5 %). The build re-checks these references on every run.
 2. **Energiföretagen weekly statistics, 2019–2025** (`processed/validation_energiforetagen.txt`).
    - The filling at the end of workbook week *w* matches the ENTSO-E value labelled *w*: the
-     median absolute difference is 95.8 GWh (the workbooks print whole or one-decimal
-     percentages of 33 748 GWh), against 670.3 GWh for the label *w − 1* and 688.6 GWh for *w + 1*.
+     median absolute difference is 95.8 GWh, against 670.3 GWh for the label *w − 1* and
+     688.6 GWh for *w + 1*. The remaining difference is mostly one of scale, not timing: dividing
+     the ENTSO-E values by the workbook filling gives a capacity of 33 627–33 684 GWh in
+     2019–2021 and 33 945–34 026 GWh in 2022–2025 (yearly medians), not the 33 748 GWh printed
+     in the workbooks.
    - Weekly hydro production agrees: correlation 0.993 in the same week (0.634 and 0.647 one week
      off) and an annual ratio ENTSO-E / Energiföretagen between 1.001 and 1.039. The UTC week bins
      therefore match the workbooks' weeks.
@@ -169,15 +174,15 @@ reconstruction (M2).
 |---|---|---|
 | 2015-W01 | all generation, load, DE price | the week starts on 2014-12-29, before the Transparency Platform data |
 | 2015-W50 | hydro, load, nuclear, other, SE price | ENTSO-E lacks SE load and generation for part of the week |
-| 2021-W50 | solar, other | solar, fossil gas and marine are only partly reported |
-| 2022-W06 | other | marine (always zero) is only partly reported |
+| 2021-W50 | solar, other | solar, fossil gas and marine are first reported during the week |
+| 2022-W06 | other | marine (always zero) is last reported during the week, with gaps |
 
 ## Limitations
 
 * Spill is not observed, so reconstructed inflows are underestimated in very wet weeks.
 * The reservoir series covers regulated storage, while hydro production includes run-of-river.
-* Solar is a structural zero before 2021 because ENTSO-E did not report it, not because Sweden
-  had none.
+* Solar is a structural zero before 2021-W50 because ENTSO-E did not report it, not because
+  Sweden had none.
 * Generation per type need not cover every small or industrial plant; residual demand and net
   import inherit any such gap.
 * Net import `N = residual demand - hydro` ignores pumping, losses and the gap between the
