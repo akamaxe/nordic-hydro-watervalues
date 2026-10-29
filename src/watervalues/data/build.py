@@ -44,6 +44,7 @@ from watervalues.data.reservoir import (
 )
 from watervalues.data.schema import (
     KNOWN_PSR_TYPES,
+    PSR_NAMES,
     PUMPED_STORAGE_PSR,
     WEEKLY_COLUMNS,
 )
@@ -235,12 +236,14 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
     provenance = (
         f"source {source}: {len(frames)} cached series, data digest {data_digest(frames)[:16]}"
     )
+    reported_types = generation.groupby("psr_type")["start_utc"].agg(["min", "max"])
     report = sanity_report(
         cfg,
         weekly,
         pumping_gwh,
         zone_load_gwh,
         zone_price_lw,
+        reported_types,
         references,
         evidence,
         interpolated,
@@ -357,6 +360,7 @@ def sanity_report(
     pumping_gwh: np.ndarray,
     zone_load_gwh: np.ndarray,
     zone_price_eur_mwh: np.ndarray,
+    reported_types: pd.DataFrame,
     references: pd.DataFrame,
     evidence: AlignmentEvidence,
     interpolated: list[pd.Timestamp],
@@ -367,7 +371,8 @@ def sanity_report(
     ``zone_load_gwh`` is the weekly sum of the zone loads [GWh] and ``zone_price_eur_mwh`` the
     load-weighted weekly price of each zone (weeks x zones) [EUR/MWh]: the SE price is a
     load-weighted mean of the zones, so it must lie between those prices (not necessarily
-    between the zones' time-averaged prices).
+    between the zones' time-averaged prices). ``reported_types`` holds the first and last
+    interval start (``min``, ``max``) of each production type of the country.
     """
     sanity = cfg.data.sanity
     w = derived_columns(weekly)
@@ -418,6 +423,15 @@ def sanity_report(
         f"  SE price between the zones' load-weighted prices: {int(inside[priced].sum())} of "
         f"{int(priced.sum())} weeks"
     )
+
+    lines.append(
+        f"\nProduction types reported for {cfg.data.country} (first and last interval, UTC)"
+    )
+    for code, span in reported_types.sort_index().iterrows():
+        lines.append(
+            f"  {code} {PSR_NAMES.get(code, 'unknown')}: "
+            f"{span['min']:%Y-%m-%d %H:%M} to {span['max']:%Y-%m-%d %H:%M}"
+        )
 
     lines.append("\nMissing values (NaN) per column")
     labels = [week_label(y, k) for y, k in zip(w["iso_year"], w["iso_week"], strict=True)]

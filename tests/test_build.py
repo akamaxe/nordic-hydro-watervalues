@@ -144,6 +144,7 @@ def test_reservoir_evidence_is_reported(synthetic) -> None:
     assert any("Reservoir convention" in line for line in result.report)
     assert any("vs its one-week shift (start_of_week)" in line for line in result.report)
     assert any(line.startswith("\nProvenance: source filelib") for line in result.report)
+    assert "  B12 Hydro Water Reservoir: 2018-12-31 00:00 to 2021-01-03 23:00" in result.report
 
 
 def test_report_checks_prices_and_zone_loads_on_comparable_weeks(synthetic) -> None:
@@ -167,6 +168,7 @@ def test_report_checks_prices_and_zone_loads_on_comparable_weeks(synthetic) -> N
             np.zeros(len(weekly)),
             zone_load,
             zone_price,
+            pd.DataFrame(columns=["min", "max"]),
             result.references,
             result.evidence,
             [],
