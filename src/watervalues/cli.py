@@ -132,6 +132,29 @@ def build(
 
 
 @app.command()
+def validate(
+    source: SourceOption = None,
+    force: Annotated[bool, typer.Option(help="Download the workbooks again.")] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Compare the reservoir data with Energiföretagen's weekly statistics (2019 onwards)."""
+    from watervalues.config import PROJECT_ROOT
+    from watervalues.data.energiforetagen import WorkbookError, validate_energiforetagen
+
+    cfg = load_config(config)
+    try:
+        _, lines = validate_energiforetagen(cfg, source or cfg.data.source, force=force)
+    except WorkbookError as exc:
+        typer.echo(f"Validation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    for line in lines:
+        typer.echo(line)
+    report = PROJECT_ROOT / cfg.data.energiforetagen.report
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    typer.echo(f"\nWrote {cfg.data.energiforetagen.report}")
+
+
+@app.command()
 def notebooks() -> None:
     """Execute every notebook in notebooks/ in order, in place, so outputs are up to date."""
     import nbformat

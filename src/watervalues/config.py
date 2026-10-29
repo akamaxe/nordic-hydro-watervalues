@@ -164,6 +164,16 @@ class FileLibConfig(_Section):
         return self
 
 
+class EnergiforetagenConfig(_Section):
+    """Energiföretagen weekly statistics, used to validate the reservoir data."""
+
+    dir: Path
+    report: Path
+    max_storage_gwh: float = Field(gt=0)
+    timeout_s: float = Field(gt=0)
+    workbooks: dict[int, str]
+
+
 class DataConfig(_Section):
     """Data sources, areas and weekly aggregation rules."""
 
@@ -184,6 +194,7 @@ class DataConfig(_Section):
     sanity: SanityConfig
     api: ApiConfig
     filelib: FileLibConfig
+    energiforetagen: EnergiforetagenConfig
 
     @model_validator(mode="after")
     def _check_references(self) -> DataConfig:

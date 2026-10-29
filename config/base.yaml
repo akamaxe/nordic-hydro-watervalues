@@ -60,7 +60,8 @@ data:
   reservoir:
     area: SE
     # Value published for ISO week w = storage at the END of week w. Verified: ENTSO-E 2026-W43
-    # equals Energiföretagen "Kraftläget i Sverige" week 43/2026 ("vid veckans slut") in all areas.
+    # equals Energiföretagen "Kraftläget i Sverige" week 43/2026 ("vid veckans slut") in all areas,
+    # and `watervalues validate` compares 2019-2025 with Energiföretagen's weekly statistics.
     label_semantics: end_of_week
     max_interp_weeks: 1       # a single missing weekly value is interpolated (and reported)
     winter_weeks: [2, 14]     # ISO weeks used by the physics check of the convention
@@ -101,3 +102,16 @@ data:
       load: ActualTotalLoad_6.1.A_r3
       price: EnergyPrices_12.1.D_r3.1
       reservoir: AggregatedFillingRateOfWaterReservoirsAndHydroStoragePlants_16.1.D_r3
+  energiforetagen:            # independent check of the reservoir data (`watervalues validate`)
+    dir: data/external/energiforetagen   # downloaded workbooks, never committed
+    report: data/processed/validation_energiforetagen.txt
+    max_storage_gwh: 33748    # "(max mag 33 748 GWh)", printed under the filling row
+    timeout_s: 60
+    workbooks:                # "Veckostatistik": energiforetagen.se/statistik/elstatistik/arkiv-aldre-statistik/
+      2019: https://www.energiforetagen.se/4a4a79/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2019.xlsx
+      2020: https://www.energiforetagen.se/4ab721/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-53_2020_v2.xlsx
+      2021: https://www.energiforetagen.se/4ab73f/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2021_v2.xlsx
+      2022: https://www.energiforetagen.se/4ab735/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2022_v2.xlsx
+      2023: https://www.energiforetagen.se/49812f/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2023_ver_d.xlsx
+      2024: https://www.energiforetagen.se/496e9b/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2024_ver_v.xlsx
+      2025: https://www.energiforetagen.se/499f8e/globalassets/energiforetagen/statistik/el/vecko--och-manadsstatistik/vecka_01-52_2025_ver_a.xlsx
