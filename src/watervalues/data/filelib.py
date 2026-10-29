@@ -140,14 +140,18 @@ def clear_credentials(service: str) -> int:
     int
         Number of entries deleted.
     """
-    deleted = 0
+
+    def count() -> int:
+        main = keyring.get_credential(service, None) is not None
+        return int(main) + len(_renamed_previous_entries(service))
+
+    before = count()
+    # keyring may also remove the renamed entry of the same user in this call.
     while (credential := keyring.get_credential(service, None)) is not None:
         keyring.delete_password(service, credential.username)
-        deleted += 1
     for target in _renamed_previous_entries(service):
         _delete_entry(target)
-        deleted += 1
-    return deleted
+    return before - count()
 
 
 def store_credentials(service: str, username: str, password: str) -> None:
