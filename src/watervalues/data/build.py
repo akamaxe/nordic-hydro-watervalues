@@ -7,6 +7,8 @@ build: a one-week misalignment would silently corrupt every inflow downstream.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,8 +29,8 @@ from watervalues.data.aggregate import (
 )
 from watervalues.data.cache import read_dataset
 from watervalues.data.calendar import week_calendar
-from watervalues.data.filelib import Manifest
 from watervalues.data.reservoir import (
+    ONE_WEEK_SHIFT,
     AlignmentEvidence,
     LabelSemantics,
     ReferencePoint,
@@ -37,6 +39,7 @@ from watervalues.data.reservoir import (
     fill_short_gaps,
     labelled_series,
     reference_residuals,
+    shift_ratio,
     storage_columns,
 )
 from watervalues.data.schema import (
@@ -47,6 +50,7 @@ from watervalues.data.schema import (
 from watervalues.units import HOURS_PER_WEEK, MWH_PER_GWH
 
 GWH_PER_TWH = MWH_PER_GWH  # 1 TWh = 1000 GWh
+_PRICE_TOL_EUR_MWH = 1e-6  # numerical tolerance of the price bound check
 
 
 class BuildError(RuntimeError):
@@ -95,7 +99,9 @@ def check_reservoir_convention(
     Raises
     ------
     BuildError
-        If either check contradicts the configured convention.
+        If a reference contradicts the configured convention, or if the winter physics do not
+        favour it over the same labels shifted by one week. The physics cannot rule out a
+        weekly mean (see :mod:`watervalues.data.reservoir`); the references do.
     """
     res = cfg.data.reservoir
     raw_dir = PROJECT_ROOT / cfg.data.raw_dir
@@ -116,10 +122,12 @@ def check_reservoir_convention(
                 f"{references.to_string(index=False)}"
             )
     evidence = diagnose_alignment(published[res.area], hydro_by_week, tuple(res.winter_weeks))
-    if evidence.best is not configured or evidence.ratio > res.max_roughness_ratio:
+    ratio = shift_ratio(evidence, configured)
+    if ratio > res.max_shift_roughness_ratio:
         raise BuildError(
-            f"winter physics favour {evidence.best.value} (roughness ratio {evidence.ratio:.2f}), "
-            f"configured {configured.value}: {evidence.roughness_gwh}"
+            f"winter physics do not favour {configured.value} over "
+            f"{ONE_WEEK_SHIFT[configured].value} (roughness ratio {ratio:.2f} > "
+            f"{res.max_shift_roughness_ratio}): {evidence.roughness_gwh}"
         )
     return references, evidence
 
@@ -141,12 +149,13 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
     """
     data = cfg.data
     raw_dir = PROJECT_ROOT / data.raw_dir
-    first, last = cfg.period.first_iso_year, cfg.period.last_iso_year
-    calendar = week_calendar(first, last)
+    calendar = week_calendar(cfg.period.first_iso_year, cfg.period.last_iso_year)
     coverage = data.min_coverage
+    frames: dict[tuple[str, str], pd.DataFrame] = {}
 
     def read(dataset: str, area: str) -> pd.DataFrame:
-        return read_dataset(raw_dir, source, dataset, area)
+        frames[dataset, area] = read_dataset(raw_dir, source, dataset, area)
+        return frames[dataset, area]
 
     generation = read("generation", data.country)
     hourly_generation = hourly_energy(generation, "value_mw", by=("psr_type",))
@@ -181,15 +190,9 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
         boundary_snapshots(labels, semantics), data.reservoir.max_interp_weeks
     )
     storage = storage_columns(snapshots, calendar)
-
-    unfolded = week_calendar(first, last, fold_week53=False)
-    hydro_unfolded = weekly_generation(
-        hourly_generation, unfolded, categories, KNOWN_PSR_TYPES, coverage
-    )["hydro_gwh"]
-    hydro_by_week = pd.Series(
-        hydro_unfolded.to_numpy(), index=pd.DatetimeIndex(unfolded["week_start"])
+    references, evidence = check_reservoir_convention(
+        cfg, source, unfolded_hydro(cfg, hourly_generation)
     )
-    references, evidence = check_reservoir_convention(cfg, source, hydro_by_week)
 
     columns = {
         "week_start": calendar["week_start"].to_numpy(),
@@ -221,10 +224,75 @@ def build_weekly(cfg: AppConfig, source: str = "filelib") -> BuildResult:
         weekly_energy(zone_load[z], calendar, coverage)["energy_gwh"].to_numpy()
         for z in data.price_zones
     )
+    zone_price_lw = np.column_stack(
+        [
+            weekly_load_weighted_price({z: zone_price[z]}, {z: zone_load[z]}, calendar, coverage)[
+                "price_eur_mwh"
+            ].to_numpy()
+            for z in data.price_zones
+        ]
+    )
+    provenance = (
+        f"source {source}: {len(frames)} cached series, data digest {data_digest(frames)[:16]}"
+    )
     report = sanity_report(
-        cfg, weekly, pumping_gwh, zone_load_gwh, references, evidence, interpolated, raw_dir
+        cfg,
+        weekly,
+        pumping_gwh,
+        zone_load_gwh,
+        zone_price_lw,
+        references,
+        evidence,
+        interpolated,
+        provenance,
     )
     return BuildResult(weekly, report, references, evidence, interpolated)
+
+
+def unfolded_hydro(cfg: AppConfig, hourly_generation: pd.DataFrame) -> pd.Series:
+    """Hydro production per ISO week with week 53 kept separate [GWh].
+
+    Parameters
+    ----------
+    cfg : AppConfig
+        Configuration (period, generation categories, minimum coverage).
+    hourly_generation : pandas.DataFrame
+        Output of :func:`~watervalues.data.aggregate.hourly_energy` by ``psr_type``.
+
+    Returns
+    -------
+    pandas.Series
+        Hydro production [GWh] indexed by the Monday 00:00 UTC that starts each ISO week.
+    """
+    unfolded = week_calendar(cfg.period.first_iso_year, cfg.period.last_iso_year, fold_week53=False)
+    hydro = weekly_generation(
+        hourly_generation,
+        unfolded,
+        cfg.data.generation_categories,
+        KNOWN_PSR_TYPES,
+        cfg.data.min_coverage,
+    )["hydro_gwh"]
+    return pd.Series(hydro.to_numpy(), index=pd.DatetimeIndex(unfolded["week_start"]))
+
+
+def data_digest(frames: Mapping[tuple[str, str], pd.DataFrame]) -> str:
+    """SHA-256 of the cached series behind a build, independent of the file format.
+
+    Parameters
+    ----------
+    frames : mapping of (dataset, area) to pandas.DataFrame
+        Normalised frames as read from the raw cache.
+
+    Returns
+    -------
+    str
+        Hex digest; equal digests mean the same input data.
+    """
+    digest = hashlib.sha256()
+    for key in sorted(frames):
+        digest.update("/".join(key).encode())
+        digest.update(pd.util.hash_pandas_object(frames[key], index=False).to_numpy().tobytes())
+    return digest.hexdigest()
 
 
 def derived_columns(weekly: pd.DataFrame) -> pd.DataFrame:
@@ -288,12 +356,19 @@ def sanity_report(
     weekly: pd.DataFrame,
     pumping_gwh: np.ndarray,
     zone_load_gwh: np.ndarray,
+    zone_price_eur_mwh: np.ndarray,
     references: pd.DataFrame,
     evidence: AlignmentEvidence,
     interpolated: list[pd.Timestamp],
-    raw_dir: Path,
+    provenance: str,
 ) -> list[str]:
-    """Human-readable checks of the weekly dataset (orders of magnitude, consistency, gaps)."""
+    """Human-readable checks of the weekly dataset (orders of magnitude, consistency, gaps).
+
+    ``zone_load_gwh`` is the weekly sum of the zone loads [GWh] and ``zone_price_eur_mwh`` the
+    load-weighted weekly price of each zone (weeks x zones) [EUR/MWh]: the SE price is a
+    load-weighted mean of the zones, so it must lie between those prices (not necessarily
+    between the zones' time-averaged prices).
+    """
     sanity = cfg.data.sanity
     w = derived_columns(weekly)
     w["pumping_gwh"] = pumping_gwh
@@ -322,22 +397,26 @@ def sanity_report(
     pumping_share = w["pumping_gwh"].sum() / w["hydro_gwh"].sum()
     flag = "OK" if pumping_share <= sanity.max_pumping_share else "ABOVE LIMIT"
     lines.append(f"  pumping / hydro production: {pumping_share:.4f} ({flag})")
-    ratio = w.groupby("iso_year").apply(
-        lambda g: g["zone_load_gwh"].sum() / g["load_gwh"].sum(), include_groups=False
+    both = w[["zone_load_gwh", "load_gwh"]].notna().all(axis=1)  # same weeks on both sides
+    ratio = (
+        w[both].groupby("iso_year")["zone_load_gwh"].sum()
+        / w[both].groupby("iso_year")["load_gwh"].sum()
     )
     worst = float((ratio - 1).abs().max())
     flag = "OK" if worst <= sanity.zone_load_rel_tol else "ABOVE TOLERANCE"
-    lines.append(f"  sum of zone loads vs SE load, worst year: {worst:.3%} ({flag})")
-    inside = (
-        w["price_se_eur_mwh"]
-        >= w[[_zone_column(z) for z in cfg.data.price_zones]].min(axis=1) - 1e-6
-    ) & (
-        w["price_se_eur_mwh"]
-        <= w[[_zone_column(z) for z in cfg.data.price_zones]].max(axis=1) + 1e-6
-    )
     lines.append(
-        f"  SE price between the zone prices: {int(inside.sum())} of "
-        f"{int(w['price_se_eur_mwh'].notna().sum())} weeks"
+        f"  sum of zone loads vs SE load (weeks with both), worst year: {worst:.3%} ({flag})"
+    )
+    se_price = w["price_se_eur_mwh"].to_numpy()
+    priced = ~np.isnan(se_price)
+    zoned = ~np.isnan(zone_price_eur_mwh).all(axis=1)
+    low, high = np.full(len(w), np.nan), np.full(len(w), np.nan)
+    low[zoned] = np.nanmin(zone_price_eur_mwh[zoned], axis=1)
+    high[zoned] = np.nanmax(zone_price_eur_mwh[zoned], axis=1)
+    inside = (se_price >= low - _PRICE_TOL_EUR_MWH) & (se_price <= high + _PRICE_TOL_EUR_MWH)
+    lines.append(
+        f"  SE price between the zones' load-weighted prices: {int(inside[priced].sum())} of "
+        f"{int(priced.sum())} weeks"
     )
 
     lines.append("\nMissing values (NaN) per column")
@@ -350,16 +429,22 @@ def sanity_report(
         weeks = [d.strftime("%Y-%m-%d") for d in interpolated]
         lines.append(f"  storage interpolated at week boundaries (UTC Monday): {weeks}")
 
-    lines.append(f"\nReservoir convention: configured {cfg.data.reservoir.label_semantics}")
+    configured = LabelSemantics(cfg.data.reservoir.label_semantics)
+    lines.append(f"\nReservoir convention: configured {configured.value}")
     lines.append(references.to_string(index=False) if not references.empty else "  no references")
     roughness = {k: round(v, 1) for k, v in evidence.roughness_gwh.items()}
+    lines.append(f"  winter roughness [GWh]: {roughness}")
     lines.append(
-        f"  winter roughness [GWh]: {roughness}, best {evidence.best.value}, "
-        f"ratio {evidence.ratio:.2f}"
+        f"  {configured.value} vs its one-week shift ({ONE_WEEK_SHIFT[configured].value}): "
+        f"ratio {shift_ratio(evidence, configured):.2f} "
+        f"(limit {cfg.data.reservoir.max_shift_roughness_ratio})"
+    )
+    lines.append(
+        "  roughness does not rule out a weekly mean (reporting noise favours it); "
+        "the references do"
     )
     lines.append(f"  negative winter inflow weeks: {evidence.negative_weeks}")
-    manifest = Manifest.load(raw_dir / "filelib" / "_manifest.json")
-    lines.append(f"\nProvenance: {len(manifest.entries)} exports, digest {manifest.digest()[:16]}")
+    lines.append(f"\nProvenance: {provenance}")
     return lines
 
 

@@ -13,10 +13,12 @@ from watervalues.data.reservoir import (
     fill_short_gaps,
     labelled_series,
     reference_residuals,
+    shift_ratio,
     storage_columns,
 )
 
 WINTER = (2, 14)
+CALM_DH_GWH, VOLATILE_DH_GWH = 115, 350  # std of weekly production changes: 2015-21 vs 2022-25
 
 
 def synthetic_reservoir(seed: int = 0, years: int = 4):
@@ -29,6 +31,22 @@ def synthetic_reservoir(seed: int = 0, years: int = 4):
     production = 1500 + rng.normal(0, 200, n)  # [GWh], follows demand
     storage = 20_000 + np.concatenate([[0.0], np.cumsum(inflow - production)])  # boundaries
     return starts, inflow, production, storage
+
+
+def noisy_end_of_week(seed: int, dh_std_gwh: float, noise_gwh: float, years: int = 11):
+    """End-of-week labels with reporting noise; production anomalies persist from week to week."""
+    rng = np.random.default_rng(seed)
+    starts = pd.date_range("2014-12-29", periods=52 * years + 1, freq="7D", tz="UTC")
+    n = len(starts)
+    season = np.cos(2 * np.pi * np.arange(n) / 52)
+    phi = 0.6  # AR(1) persistence; innovations scaled so that std(diff) = dh_std_gwh
+    anomaly = np.zeros(n)
+    for i in range(1, n):
+        anomaly[i] = phi * anomaly[i - 1] + rng.normal(0, dh_std_gwh * np.sqrt((1 + phi) / 2))
+    production = 1300 + 300 * season + anomaly
+    inflow = 1300 - 900 * season + rng.normal(0, 40, n)
+    end_storage = 20_000 + np.cumsum(inflow - production) + rng.normal(0, noise_gwh, n)
+    return pd.Series(end_storage, index=starts), pd.Series(production, index=starts)
 
 
 def publish(starts, storage, semantics: LabelSemantics) -> pd.DataFrame:
@@ -63,6 +81,35 @@ def test_diagnosis_recovers_the_true_convention(truth: LabelSemantics) -> None:
         assert evidence.ratio < 1.0
     else:
         assert evidence.ratio < 0.2
+
+
+def test_shift_ratio_compares_a_snapshot_convention_with_its_one_week_shift() -> None:
+    starts, _, production, storage = synthetic_reservoir()
+    published = labelled_series(publish(starts, storage, LabelSemantics.END_OF_WEEK))
+    evidence = diagnose_alignment(published, pd.Series(production, index=starts), WINTER)
+    assert shift_ratio(evidence, LabelSemantics.END_OF_WEEK) < 0.2
+    assert shift_ratio(evidence, LabelSemantics.START_OF_WEEK) > 5
+    with pytest.raises(ValueError, match="no one-week shift"):
+        shift_ratio(evidence, LabelSemantics.WEEKLY_MEAN)
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_reporting_noise_favours_the_weekly_mean_but_not_a_one_week_shift(seed: int) -> None:
+    # End-of-week truth with 60 GWh of storage reporting noise and calm production (2015-21):
+    # the centred difference of the weekly-mean estimator smooths the noise, so roughness
+    # alone picks the wrong convention, while the one-week shift is still clearly worse.
+    published, hydro = noisy_end_of_week(seed, CALM_DH_GWH, noise_gwh=60)
+    evidence = diagnose_alignment(published, hydro, WINTER)
+    assert evidence.best is LabelSemantics.WEEKLY_MEAN
+    assert shift_ratio(evidence, LabelSemantics.END_OF_WEEK) < 1
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_volatile_production_lets_roughness_find_end_of_week_despite_noise(seed: int) -> None:
+    published, hydro = noisy_end_of_week(seed, VOLATILE_DH_GWH, noise_gwh=60)
+    evidence = diagnose_alignment(published, hydro, WINTER)
+    assert evidence.best is LabelSemantics.END_OF_WEEK
+    assert shift_ratio(evidence, LabelSemantics.END_OF_WEEK) < 0.5
 
 
 def test_end_of_week_storage_closes_the_balance_exactly() -> None:

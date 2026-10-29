@@ -1,17 +1,23 @@
 """End-to-end test of the weekly build on a synthetic raw cache (ISO years 2019-2020)."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from watervalues.config import load_config
+from watervalues.data.aggregate import hourly_energy
 from watervalues.data.build import (
     build_weekly,
+    data_digest,
     load_weekly,
+    sanity_report,
     unexplained_missing,
+    unfolded_hydro,
     write_weekly_csv,
 )
-from watervalues.data.cache import write_dataset
+from watervalues.data.cache import read_dataset, write_dataset
 from watervalues.data.schema import WEEKLY_COLUMNS
 
 ZONE_SHARE = {"SE1": 0.1, "SE2": 0.2, "SE3": 0.6, "SE4": 0.1}
@@ -136,6 +142,56 @@ def test_reservoir_evidence_is_reported(synthetic) -> None:
     result = build_weekly(cfg)
     assert result.evidence.best.value == "end_of_week"
     assert any("Reservoir convention" in line for line in result.report)
+    assert any("vs its one-week shift (start_of_week)" in line for line in result.report)
+    assert any(line.startswith("\nProvenance: source filelib") for line in result.report)
+
+
+def test_report_checks_prices_and_zone_loads_on_comparable_weeks(synthetic) -> None:
+    cfg, _, _ = synthetic
+    result = build_weekly(cfg)
+    assert any(
+        line.endswith("between the zones' load-weighted prices: 104 of 104 weeks")
+        for line in result.report
+    )
+    weekly = result.weekly.copy()
+    zone_load = weekly["load_gwh"].to_numpy().copy()
+    weekly.loc[0, "load_gwh"] = np.nan  # SE load missing in a week that the zones cover
+    zone_price = np.tile([ZONE_PRICE[z] for z in ZONE_SHARE], (len(weekly), 1))
+    zone_price[1] = np.nan  # a week without zone prices: no bound, and no warning
+    weekly.loc[1, "price_se_eur_mwh"] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        lines = sanity_report(
+            cfg,
+            weekly,
+            np.zeros(len(weekly)),
+            zone_load,
+            zone_price,
+            result.references,
+            result.evidence,
+            [],
+            "test",
+        )
+    zone_line = next(line for line in lines if "sum of zone loads" in line)
+    assert zone_line.endswith("0.000% (OK)")
+    assert any(line.endswith("load-weighted prices: 103 of 103 weeks") for line in lines)
+
+
+def test_unfolded_hydro_keeps_week_53_separate(synthetic) -> None:
+    cfg, _, hydro = synthetic
+    generation = read_dataset(cfg.data.raw_dir, "filelib", "generation", "SE")
+    series = unfolded_hydro(cfg, hourly_energy(generation, "value_mw", by=("psr_type",)))
+    assert len(series) == 52 + 53
+    np.testing.assert_allclose(series.to_numpy(), hydro)
+
+
+def test_data_digest_depends_on_content_not_on_order() -> None:
+    a = pd.DataFrame({"x": [1.0, 2.0]})
+    b = pd.DataFrame({"y": [3.0]})
+    assert data_digest({("load", "SE"): a, ("price", "SE1"): b}) == data_digest(
+        {("price", "SE1"): b, ("load", "SE"): a}
+    )
+    assert data_digest({("load", "SE"): a}) != data_digest({("load", "SE"): a + 1})
 
 
 def test_csv_round_trip_and_missing_value_check(synthetic, tmp_path) -> None:

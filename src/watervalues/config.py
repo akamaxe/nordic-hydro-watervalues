@@ -118,7 +118,7 @@ class ReservoirDataConfig(_Section):
     label_semantics: Literal["start_of_week", "end_of_week", "weekly_mean"]
     max_interp_weeks: int = Field(ge=0)
     winter_weeks: tuple[int, int]
-    max_roughness_ratio: float = Field(gt=0, lt=1)
+    max_shift_roughness_ratio: float = Field(gt=0, lt=1)  # configured vs one-week shift
     reference_tolerance_gwh: float = Field(gt=0)
     references: tuple[ReferenceConfig, ...] = ()
 

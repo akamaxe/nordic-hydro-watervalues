@@ -3,8 +3,15 @@
 ENTSO-E publishes one value per ISO week (data item 16.1.D) without saying whether it is the
 content at the start of the week, at its end, or a weekly mean ("no standard method"). A one-week
 misalignment silently corrupts the inflow reconstruction ``I = S_end - S_start + P``, so the
-convention is checked against an external reference and against the physics of winter weeks,
+convention is checked against external references and against the physics of winter weeks,
 where inflow is small and smooth while production varies with demand.
+
+The physics robustly separates the two snapshot conventions, which are one week apart. It does
+not separate end-of-week values from weekly means: the end-of-week inflow differences two
+consecutive labels, so white noise in the reported storage enters the variance of its weekly
+changes six times (a second difference), while the weekly-mean estimator differences labels two
+weeks apart and carries that variance only once. With calm production a few tens of GWh of
+reporting noise make the weekly mean look smoother, so external references decide that case.
 """
 
 from __future__ import annotations
@@ -29,6 +36,13 @@ class LabelSemantics(StrEnum):
     START_OF_WEEK = "start_of_week"
     END_OF_WEEK = "end_of_week"
     WEEKLY_MEAN = "weekly_mean"
+
+
+# The same snapshots labelled one week apart (a weekly mean has no such counterpart).
+ONE_WEEK_SHIFT = {
+    LabelSemantics.END_OF_WEEK: LabelSemantics.START_OF_WEEK,
+    LabelSemantics.START_OF_WEEK: LabelSemantics.END_OF_WEEK,
+}
 
 
 @dataclass(frozen=True)
@@ -208,6 +222,8 @@ def diagnose_alignment(
     In winter the true inflow is small and slowly varying, while production follows demand.
     Under the right convention the production term cancels; a one-week shift leaves the
     week-to-week production change in the implied inflow (half of it for the weekly mean).
+    Reporting noise favours the weekly mean (see the module docstring): use
+    :func:`shift_ratio` for a verdict that the physics can support.
 
     Parameters
     ----------
@@ -249,6 +265,33 @@ def diagnose_alignment(
         year: min(by_year, key=lambda s, y=year: by_year[s][y]) for year in sorted(common_years)
     }
     return AlignmentEvidence(roughness, negatives, best, ratio, best_by_year)
+
+
+def shift_ratio(evidence: AlignmentEvidence, semantics: LabelSemantics) -> float:
+    """Winter roughness under a snapshot convention relative to its one-week shift.
+
+    Parameters
+    ----------
+    evidence : AlignmentEvidence
+        Output of :func:`diagnose_alignment`.
+    semantics : LabelSemantics
+        ``END_OF_WEEK`` or ``START_OF_WEEK``.
+
+    Returns
+    -------
+    float
+        Ratio of roughnesses [-]; well below one supports ``semantics`` over the labels shifted
+        by one week.
+
+    Raises
+    ------
+    ValueError
+        For ``WEEKLY_MEAN``, which has no one-week counterpart.
+    """
+    if semantics not in ONE_WEEK_SHIFT:
+        raise ValueError(f"{semantics.value} has no one-week shift")
+    shifted = ONE_WEEK_SHIFT[semantics]
+    return evidence.roughness_gwh[semantics.value] / evidence.roughness_gwh[shifted.value]
 
 
 def reference_residuals(

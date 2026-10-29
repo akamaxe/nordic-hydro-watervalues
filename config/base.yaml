@@ -64,7 +64,9 @@ data:
     label_semantics: end_of_week
     max_interp_weeks: 1       # a single missing weekly value is interpolated (and reported)
     winter_weeks: [2, 14]     # ISO weeks used by the physics check of the convention
-    max_roughness_ratio: 0.7
+    # Winter-inflow roughness of the configured convention / the labels shifted by one week.
+    # Roughness cannot rule out a weekly mean (see watervalues.data.reservoir): references do.
+    max_shift_roughness_ratio: 0.7
     reference_tolerance_gwh: 1
     references:               # Energiföretagen, Kraftläget i Sverige, vecka 43 2026, page 1
       - {area: SE, iso_year: 2026, iso_week: 43, stored_gwh: 25339}

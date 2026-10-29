@@ -173,6 +173,33 @@ def test_load_weighted_price_skips_hours_with_a_missing_zone() -> None:
     assert weekly.loc[0, "price_eur_mwh"] == pytest.approx(32.5)  # never the SE1-only price
 
 
+def test_se_price_is_bounded_by_load_weighted_not_time_averaged_zone_prices() -> None:
+    # Price and load peak together in the expensive zone, as on winter evenings in SE3.
+    peak = (np.arange(168) % 24 >= 17).astype(float)
+
+    def hourly_price(value):
+        df = intervals(WEEK1, 168, 60, value).rename(columns={"value_mw": "price_eur_mwh"})
+        return hourly_mean(df)
+
+    prices = {"SE1": hourly_price(20.0), "SE3": hourly_price(30.0 + 70.0 * peak)}
+    loads = {
+        "SE1": hourly_energy(intervals(WEEK1, 168, 60, 1000.0)),
+        "SE3": hourly_energy(intervals(WEEK1, 168, 60, 3000.0 + 6000.0 * peak)),
+    }
+    se = weekly_load_weighted_price(prices, loads, CAL_2025, MIN_COVERAGE).loc[0, "price_eur_mwh"]
+    time_mean = [
+        weekly_mean(p, CAL_2025, MIN_COVERAGE).loc[0, "price_eur_mwh"] for p in prices.values()
+    ]
+    load_weighted = [
+        weekly_load_weighted_price({z: prices[z]}, {z: loads[z]}, CAL_2025, MIN_COVERAGE).loc[
+            0, "price_eur_mwh"
+        ]
+        for z in prices
+    ]
+    assert se > max(time_mean)
+    assert min(load_weighted) <= se <= max(load_weighted)
+
+
 def test_stitch_respects_the_switch_instant() -> None:
     switch = pd.Timestamp("2018-09-30 22:00", tz="UTC")
     hours = pd.date_range("2018-09-30 20:00", periods=4, freq="h", tz="UTC")
