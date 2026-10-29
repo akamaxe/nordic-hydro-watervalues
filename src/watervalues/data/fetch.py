@@ -155,7 +155,7 @@ def fetch_filelib(
         eics = [data.areas[a].eic for a in areas]
         parts: dict[str, list[pd.DataFrame]] = {a: [] for a in areas}
         for path in paths:
-            raw = exports.read_export(path, spec.columns, eics)
+            raw = exports.read_export(path, spec.columns, eics, settings.read_chunk_rows)
             for area in areas:
                 rows = exports.select_area(raw, data.areas[area])
                 if len(rows):

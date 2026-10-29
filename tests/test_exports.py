@@ -51,7 +51,7 @@ def test_generation_export_is_filtered_and_normalised(tmp_path) -> None:
     ]
     path = tmp_path / "gen.zip"
     write_zip(path, "2025_06_gen.csv", tsv(rows))
-    raw = exports.read_export(path, exports.GENERATION_COLUMNS, [SE.eic, SE1.eic])
+    raw = exports.read_export(path, exports.GENERATION_COLUMNS, [SE.eic, SE1.eic], chunk_rows=2)
     assert set(raw["AreaCode"]) == {SE.eic, SE1.eic}  # Austria dropped while reading
     se = exports.parse_generation(exports.select_area(raw, SE))
     assert se["psr_type"].tolist() == ["B12", "B14"]

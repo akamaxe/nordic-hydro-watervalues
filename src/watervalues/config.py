@@ -143,6 +143,7 @@ class FileLibConfig(_Section):
     max_requests_per_minute: int = Field(gt=0, le=100)
     max_retries: int = Field(ge=0)
     backoff_s: float = Field(ge=0)
+    read_chunk_rows: int = Field(gt=0)
     folders: dict[str, str]
 
     @model_validator(mode="after")

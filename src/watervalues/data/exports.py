@@ -65,8 +65,13 @@ RESERVOIR_COLUMNS = (
 )
 
 
-def read_export(path: Path, columns: Sequence[str], area_codes: Sequence[str]) -> pd.DataFrame:
+def read_export(
+    path: Path, columns: Sequence[str], area_codes: Sequence[str], chunk_rows: int
+) -> pd.DataFrame:
     """Read the export inside a File Library zip, keeping only some areas.
+
+    The file is read in chunks and filtered as it goes, so memory stays bounded even for the
+    generation exports (over a million rows per month, all areas).
 
     Parameters
     ----------
@@ -76,6 +81,8 @@ def read_export(path: Path, columns: Sequence[str], area_codes: Sequence[str]) -
         Columns to read; all are read as text.
     area_codes : sequence of str
         EIC codes to keep.
+    chunk_rows : int
+        Rows read at a time.
 
     Returns
     -------
@@ -87,15 +94,19 @@ def read_export(path: Path, columns: Sequence[str], area_codes: Sequence[str]) -
         if len(members) != 1:
             raise ValueError(f"expected one CSV in {path.name}, found {members}")
         with zf.open(members[0]) as fh:
-            df = pd.read_csv(
+            reader = pd.read_csv(
                 fh,
                 sep="\t",
                 encoding="utf-8-sig",
                 usecols=list(columns),
                 dtype=str,
                 keep_default_na=False,
+                chunksize=chunk_rows,
             )
-    return df[df["AreaCode"].isin(area_codes)].reset_index(drop=True)
+            kept = [chunk[chunk["AreaCode"].isin(area_codes)] for chunk in reader]
+    if not kept:
+        return pd.DataFrame(columns=list(columns))
+    return pd.concat(kept, ignore_index=True)
 
 
 def select_area(df: pd.DataFrame, spec: AreaSpec) -> pd.DataFrame:
