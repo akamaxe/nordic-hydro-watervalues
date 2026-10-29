@@ -164,26 +164,28 @@ def parse_load(rows: pd.DataFrame) -> pd.DataFrame:
 def parse_prices(rows: pd.DataFrame, price_filter: PriceFilterConfig) -> pd.DataFrame:
     """Normalise day-ahead price rows of one area [EUR/MWh].
 
-    Only the configured contract type, currency and auction sequences are kept.
+    Only the configured contract type, currency and auction sequences are kept. Text fields are
+    compared without surrounding spaces: rows without an auction sequence carry a single space.
 
     Raises
     ------
     ValueError
         If a kept row is in another currency, so that no price is silently mixed.
     """
-    keep = (rows["ContractType"] == price_filter.contract_type) & rows["Sequence"].isin(
-        price_filter.sequences
-    )
+    sequence = rows["Sequence"].str.strip()
+    contract = rows["ContractType"].str.strip()
+    keep = (contract == price_filter.contract_type) & sequence.isin(price_filter.sequences)
     kept = rows[keep]
-    other_currency = kept["Currency"] != price_filter.currency
+    currency = kept["Currency"].str.strip()
+    other_currency = currency != price_filter.currency
     if other_currency.any():
-        found = sorted(kept.loc[other_currency, "Currency"].unique())
+        found = sorted(currency[other_currency].unique())
         raise ValueError(f"day-ahead prices in unexpected currencies: {found}")
     return pd.DataFrame(
         {
             "start_utc": _times(kept["DateTime(UTC)"]),
             "resolution_min": resolution_minutes(kept["ResolutionCode"]),
-            "sequence": kept["Sequence"].to_numpy(),
+            "sequence": sequence[keep].to_numpy(),
             "price_eur_mwh": _numbers(kept["Price[Currency/MWh]"]),
             "update_utc": _times(kept["UpdateTime(UTC)"]),
         }

@@ -96,7 +96,7 @@ FILTER = PriceFilterConfig(contract_type="Day-ahead", currency="EUR", sequences=
 def test_prices_keep_only_the_day_ahead_auction() -> None:
     rows = pd.concat(
         [
-            price_rows(),
+            price_rows(sequence=" "),  # the exports mark "no sequence" with a single space
             price_rows(sequence="1"),
             price_rows(sequence="2"),  # a second auction, e.g. EXAA
             price_rows(contract="Intraday"),
