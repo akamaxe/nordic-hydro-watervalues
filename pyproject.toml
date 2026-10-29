@@ -1,0 +1,80 @@
+[project]
+name = "nordic-hydro-watervalues"
+version = "0.1.0"
+description = "Water values for the aggregated Swedish hydro reservoir: a minimal, open EMPS-style stochastic dynamic programming model built on ENTSO-E data."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Marciu", email = "104652375+akamaxe@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "entsoe-py>=0.8.1",
+    "keyring>=25.7.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.4",
+    "pandas>=3.1.0",
+    "pyarrow>=26.0.0",
+    "pydantic>=2.14.1",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+    "scipy>=1.18.1",
+    "statsmodels>=0.15.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+watervalues = "watervalues.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "watervalues"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF",
+    "PTH",      # pathlib (Windows-safe paths)
+    "NPY",      # NumPy-specific rules
+    "PD",       # pandas-vet
+    "DTZ",      # timezone-aware datetimes (all timestamps are UTC)
+    "T20",      # no print() in library code
+    "PLR2004",  # no magic numbers: parameters live in config/base.yaml
+    "D",        # docstrings (NumPy convention)
+]
+ignore = [
+    "D105",  # magic methods need no docstring
+    "D107",  # __init__ is documented in the class docstring
+]
+allowed-confusables = ["×", "−", "–", "·"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "PLR2004", "T20"]
+"notebooks/**" = ["D", "T20", "PLR2004", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib", "-m", "not network"]
+markers = ["network: needs internet access and credentials (deselected by default)"]
+filterwarnings = ["error::FutureWarning:watervalues"]
+xfail_strict = true
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+    "nbconvert>=7.17.2",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
