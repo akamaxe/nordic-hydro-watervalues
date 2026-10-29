@@ -10,6 +10,7 @@ from watervalues.data.reservoir import (
     ReferencePoint,
     boundary_snapshots,
     diagnose_alignment,
+    fill_short_gaps,
     labelled_series,
     reference_residuals,
     storage_columns,
@@ -98,6 +99,15 @@ def test_folded_week_ends_at_the_next_iso_year() -> None:
     # 2015-W52 is folded with W53: it starts after W51 and ends after W53 (the 53rd boundary).
     np.testing.assert_allclose(columns["storage_gwh"].iloc[51], storage[51])
     np.testing.assert_allclose(columns["storage_end_gwh"].iloc[51], storage[53])
+
+
+def test_only_short_gaps_are_interpolated() -> None:
+    index = pd.date_range("2016-01-04", periods=8, freq="7D", tz="UTC")
+    values = pd.Series([10.0, np.nan, 30.0, np.nan, np.nan, 60.0, 70.0, 80.0], index=index)
+    filled, interpolated = fill_short_gaps(values.dropna(), max_weeks=1)
+    assert filled.iloc[1] == pytest.approx(20.0)
+    assert np.isnan(filled.iloc[3]) and np.isnan(filled.iloc[4])  # two missing weeks: kept
+    assert interpolated == [index[1]]
 
 
 def test_weekly_mean_semantics_is_refused() -> None:

@@ -123,6 +123,16 @@ class ReservoirDataConfig(_Section):
     references: tuple[ReferenceConfig, ...] = ()
 
 
+class SanityConfig(_Section):
+    """Plausibility bands reported by the build (warnings only, never used for tuning)."""
+
+    load_twh_per_year: tuple[float, float]
+    hydro_twh_per_year: tuple[float, float]
+    storage_capacity_ref_gwh: float = Field(gt=0)
+    zone_load_rel_tol: float = Field(gt=0)
+    max_pumping_share: float = Field(ge=0)
+
+
 class FileLibConfig(_Section):
     """ENTSO-E File Library access (website login, no API token)."""
 
@@ -158,6 +168,7 @@ class DataConfig(_Section):
     prices: PriceFilterConfig
     generation_categories: dict[str, tuple[str, ...]]
     reservoir: ReservoirDataConfig
+    sanity: SanityConfig
     filelib: FileLibConfig
 
     @model_validator(mode="after")

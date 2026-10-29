@@ -106,6 +106,43 @@ def boundary_snapshots(labels: pd.DataFrame, semantics: LabelSemantics) -> pd.Se
     return series
 
 
+def fill_short_gaps(snapshots: pd.Series, max_weeks: int) -> tuple[pd.Series, list[pd.Timestamp]]:
+    """Linearly interpolate runs of at most ``max_weeks`` missing weekly snapshots.
+
+    Longer gaps are left missing, so that a long outage is never papered over.
+
+    Parameters
+    ----------
+    snapshots : pandas.Series
+        Storage [GWh] at weekly boundaries (output of :func:`boundary_snapshots`).
+    max_weeks : int
+        Longest run of consecutive missing weeks that is interpolated.
+
+    Returns
+    -------
+    tuple of (pandas.Series, list of Timestamp)
+        Snapshots on a complete weekly grid, and the boundaries that were interpolated.
+    """
+    if snapshots.empty:
+        return snapshots, []
+    grid = pd.date_range(snapshots.index.min(), snapshots.index.max(), freq=WEEK)
+    full = snapshots.reindex(grid)
+    missing = full.isna().to_numpy()
+    filled = full.interpolate(method="time", limit_area="inside")
+    interpolated: list[pd.Timestamp] = []
+    run_start = None
+    for i, is_missing in enumerate([*missing, False]):
+        if is_missing and run_start is None:
+            run_start = i
+        elif not is_missing and run_start is not None:
+            if i - run_start <= max_weeks:
+                interpolated.extend(grid[run_start:i])
+            else:
+                filled.iloc[run_start:i] = np.nan
+            run_start = None
+    return filled, interpolated
+
+
 def storage_columns(snapshots: pd.Series, calendar: pd.DataFrame) -> pd.DataFrame:
     """Storage at the start and at the end of each calendar bin.
 

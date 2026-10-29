@@ -11,6 +11,7 @@ PSR_NAMES: Final[dict[str, str]] = {
     code: name for code, name in PSRTYPE_MAPPINGS.items() if code.startswith("B")
 }
 KNOWN_PSR_TYPES: Final[tuple[str, ...]] = tuple(sorted(PSR_NAMES))
+PUMPED_STORAGE_PSR: Final = "B10"  # its consumption is pumping, reported in the build
 
 # Spelling variants seen in ENTSO-E files and entsoe-py versions.
 _NAME_ALIASES: Final[dict[str, str]] = {"poundage": "pondage"}

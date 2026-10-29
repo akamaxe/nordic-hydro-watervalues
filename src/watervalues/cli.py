@@ -59,6 +59,43 @@ def fetch(
 
 
 @app.command()
+def build(
+    strict: Annotated[
+        bool, typer.Option(help="Fail on missing values not listed in data/known_gaps.yaml.")
+    ] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Build data/processed/weekly_se.csv from the raw cache and print the sanity report."""
+    from watervalues.config import PROJECT_ROOT
+    from watervalues.data.build import (
+        BuildError,
+        build_weekly,
+        load_known_gaps,
+        unexplained_missing,
+        write_weekly_csv,
+    )
+
+    cfg = load_config(config)
+    try:
+        result = build_weekly(cfg, cfg.data.source)
+    except BuildError as exc:
+        typer.echo(f"Build stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    for line in result.report:
+        typer.echo(line)
+    missing = unexplained_missing(
+        result.weekly, load_known_gaps(PROJECT_ROOT / cfg.data.known_gaps_file)
+    )
+    if missing:
+        typer.echo(f"\n{len(missing)} missing values are not documented: {missing}")
+        if strict:
+            raise typer.Exit(code=1)
+    target = PROJECT_ROOT / cfg.data.weekly_csv
+    write_weekly_csv(result.weekly, target, cfg.data.csv_float_format)
+    typer.echo(f"\nWrote {cfg.data.weekly_csv} ({len(result.weekly)} weeks)")
+
+
+@app.command()
 def login(config: ConfigOption = None) -> None:
     """Check your ENTSO-E website login once and store it in the OS credential store.
 
