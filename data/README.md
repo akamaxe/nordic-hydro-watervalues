@@ -6,9 +6,10 @@ Provenance, licence, processing rules and known gaps of the data behind the mode
 |---|---|---|
 | `raw/<source>/<dataset>/<area>/<year>.parquet` | Normalised raw cache, rebuilt by `watervalues fetch` | no |
 | `raw/filelib/_archives/`, `raw/filelib/_manifest.json` | File Library downloads and their checksums | no |
-| `external/` | Manually downloaded reference files | no (except its README) |
+| `external/` | Reference files, e.g. `energiforetagen/` downloaded by `watervalues validate` | no (except its README) |
 | `processed/weekly_se.csv` | Weekly dataset used by the model | yes |
 | `processed/build_report.txt` | Sanity report of the build that produced the CSV | yes |
+| `processed/validation_energiforetagen.txt` | Comparison of the ENTSO-E series with Energiföretagen's weekly statistics | yes |
 | `known_gaps.yaml` | Documented missing values of the weekly dataset | yes |
 
 ## Sources
@@ -34,11 +35,20 @@ Two interchangeable access paths write the same normalised cache (`data.source` 
 
 Building the weekly dataset from both sources and comparing them is a check of the pipeline itself.
 
+**Validation only (not used by the model):** Energiföretagen's yearly weekly statistics
+("Veckostatistik", 2019–2025, from its
+[statistics archive](https://www.energiforetagen.se/statistik/elstatistik/arkiv-aldre-statistik/)),
+with the end-of-week reservoir filling, hydro production and inflow of each ISO week.
+`watervalues validate` downloads the workbooks into `external/energiforetagen/` and writes the
+comparison to `processed/validation_energiforetagen.txt`, together with the workbooks' SHA-256
+digests.
+
 ### Retrieval
 
 ```bash
 uv run watervalues fetch              # all datasets, from data.source
 uv run watervalues build --strict     # weekly_se.csv + build_report.txt
+uv run watervalues validate           # validation_energiforetagen.txt
 ```
 
 Without any credentials, the committed `processed/weekly_se.csv` is enough to run the model and
@@ -50,6 +60,9 @@ Source of all series: **ENTSO-E Transparency Platform**. The platform's terms of
 citing it as the source and not implying ENTSO-E's endorsement. Day-ahead prices originate from
 the power exchanges; the ENTSO-E list of freely re-usable data must be checked before this
 repository is made public.
+
+The Energiföretagen workbooks (source: Energiföretagen Sverige, *Veckostatistik*) are not
+redistributed: only statistics derived from them are committed.
 
 ## Processing rules (`weekly_se.csv`)
 
@@ -70,7 +83,9 @@ publication.
 hydro = B10 + B11 + B12 (gross output; pumping consumption is reported, not subtracted),
 nuclear = B14, wind = B18 + B19, solar = B16, other = every remaining type. A type that the area
 did not report at all in a week counts as zero only if other types were reported that week and
-the type was outside its reporting period (e.g. solar before its first report).
+the type was outside its reporting period (e.g. solar before its first report). For Sweden,
+ENTSO-E reports all hydro as water reservoir (B12), and fossil gas (B04), marine (B13) and solar
+(B16) only from 2021; the build report lists the first and last interval of every type.
 
 **Load.** `load_gwh` is the Swedish country load; SE1–SE4 loads serve as price weights and as a
 cross-check (their sum is compared with the country load in the build report).
@@ -88,20 +103,39 @@ weeks around it is unchanged.
 
 ENTSO-E publishes one value per ISO week without defining whether it is the storage at the start
 of the week, at its end, or a weekly mean (16.1.D: "no standard method"). A one-week
-misalignment would corrupt every inflow `I = storage_end - storage + hydro`. Two independent
-checks were made:
+misalignment would corrupt every inflow `I = storage_end - storage + hydro`. Three checks were
+made:
 
-1. **External reference (decisive).** Energiföretagen, *Kraftläget i Sverige*, week 43/2026
+1. **External reference.** Energiföretagen, *Kraftläget i Sverige*, week 43/2026
    (19–25 October), page 1, reports the energy content at the end of the week ("vid veckans
    slut"): SE 25 339 GWh, SE1 10 447, SE2 12 976, SE3 1 872, SE4 44 GWh. The ENTSO-E values
    published for 2026-W43 are identical in all five areas, and the ratio of the values published
    for 2026-W42 and W43 agrees, within rounding, with the report's filling at the start and at
-   the end of the week (74.7 % and 75.5 %).
-2. **Physics of winter weeks.** In ISO weeks 2–14 inflow is small and smooth while production
-   follows demand. Only the correct convention cancels production in the implied inflow; the
-   build compares the week-to-week roughness of the implied winter inflow under the three
-   conventions and fails if the configured one is not clearly the smoothest (see
-   `processed/build_report.txt`).
+   the end of the week (74.7 % and 75.5 %). The build re-checks these references on every run.
+2. **Energiföretagen weekly statistics, 2019–2025** (`processed/validation_energiforetagen.txt`).
+   - The filling at the end of workbook week *w* matches the ENTSO-E value labelled *w*: the
+     median absolute difference is 95.8 GWh (the workbooks print whole or one-decimal
+     percentages of 33 748 GWh), against 670.3 GWh for the label *w − 1* and 688.6 GWh for *w + 1*.
+   - Weekly hydro production agrees: correlation 0.993 in the same week (0.634 and 0.647 one week
+     off) and an annual ratio ENTSO-E / Energiföretagen between 1.001 and 1.039. The UTC week bins
+     therefore match the workbooks' weeks.
+   - The published weekly inflow is reproduced by the end-of-week convention (correlation 0.989,
+     RMSE 163 GWh/week; in weeks 2–14, 0.941 and 76 GWh/week), far better than by a weekly mean
+     (0.931 and 375; 0.618 and 192) or by start-of-week values (0.786 and 663; 0.205 and 370).
+     End of week has the lowest error in every year, in both windows.
+   - The workbooks leave the filling and inflow of 2020-W51 to W53 and 2021-W52 empty (zero) and
+     print fillings above 100 % for 2022-W38 and W39 (apparently a lost decimal point); those
+     weeks are skipped and listed in the report.
+3. **Physics of winter weeks** (`processed/build_report.txt`). In ISO weeks 2–14 inflow is small
+   and smooth while production follows demand, so the right convention cancels production in the
+   implied inflow. The week-to-week roughness of the implied winter inflow is 142.0 GWh for end of
+   week against 257.8 GWh for the same labels shifted by one week (start of week), a ratio of
+   0.55; the build fails above 0.7. Roughness cannot rule out a weekly mean (131.7 GWh): the
+   end-of-week inflow differences two consecutive labels, so white noise in the reported storage
+   enters the variance of its weekly changes six times, while the weekly-mean estimator differences
+   labels two weeks apart and carries it once. With calm production, a synthetic end-of-week
+   reservoir with 60 GWh of reporting noise makes roughness prefer the weekly mean
+   (`tests/test_reservoir.py`). Checks 1 and 2 decide that case.
 
 Conclusion: **the value published for week *w* is the storage at the end of week *w***. Hence
 `storage_gwh(w)` = value published for *w − 1* and `storage_end_gwh(w)` = value published for *w*.
@@ -127,11 +161,24 @@ two-hour offset that is negligible at weekly resolution.
 ## Known gaps
 
 Missing values in `weekly_se.csv` are listed with their reason in `known_gaps.yaml`;
-`watervalues build --strict` fails on any missing value that is not documented there.
+`watervalues build --strict` fails on any missing value that is not documented there. Nothing is
+imputed in the weekly dataset; how the model treats these weeks is decided with the inflow
+reconstruction (M2).
+
+| Weeks | Missing columns | Reason |
+|---|---|---|
+| 2015-W01 | all generation, load, DE price | the week starts on 2014-12-29, before the Transparency Platform data |
+| 2015-W50 | hydro, load, nuclear, other, SE price | ENTSO-E lacks SE load and generation for part of the week |
+| 2021-W50 | solar, other | solar, fossil gas and marine are only partly reported |
+| 2022-W06 | other | marine (always zero) is only partly reported |
 
 ## Limitations
 
 * Spill is not observed, so reconstructed inflows are underestimated in very wet weeks.
 * The reservoir series covers regulated storage, while hydro production includes run-of-river.
+* Solar is a structural zero before 2021 because ENTSO-E did not report it, not because Sweden
+  had none.
+* Generation per type need not cover every small or industrial plant; residual demand and net
+  import inherit any such gap.
 * Net import `N = residual demand - hydro` ignores pumping, losses and the gap between the
   country load and the sum of the zones.
