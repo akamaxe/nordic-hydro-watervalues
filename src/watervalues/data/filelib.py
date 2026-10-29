@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 import zipfile
 from collections.abc import Callable, Iterable
@@ -51,6 +52,110 @@ class RateLimitedError(RuntimeError):
     """The File Library answered HTTP 429; retrying now would extend the ban."""
 
 
+class LoginError(RuntimeError):
+    """The Transparency Platform rejected the website login."""
+
+
+def check_login(
+    username: str,
+    password: str,
+    token_url: str,
+    client_id: str,
+    timeout_s: float,
+    session: requests.Session | None = None,
+) -> None:
+    """Try the website login once against the Transparency Platform identity server.
+
+    Parameters
+    ----------
+    username, password : str
+        Website login. Never print or log them.
+    token_url, client_id : str
+        OpenID Connect token endpoint and public client of the File Library.
+    timeout_s : float
+        Request timeout [s].
+    session : requests.Session or None
+        HTTP session (injected in tests).
+
+    Raises
+    ------
+    LoginError
+        With the server's reason (for example "Invalid user credentials").
+    """
+    http = session or requests.Session()
+    response = http.post(
+        token_url,
+        data={
+            "client_id": client_id,
+            "grant_type": "password",
+            "username": username,
+            "password": password,
+        },
+        timeout=timeout_s,
+    )
+    if response.status_code == HTTPStatus.OK:
+        return
+    try:
+        body = response.json()
+        reason = body.get("error_description") or body.get("error")
+    except ValueError:
+        reason = None
+    raise LoginError(f"HTTP {response.status_code}: {reason or 'login rejected'}")
+
+
+def _renamed_previous_entries(service: str) -> list[str]:
+    """Credential-store targets where keyring moved earlier logins (Windows only).
+
+    On Windows, saving a new login over an existing one makes keyring keep the old one under
+    ``<username>@<service>``. Only target names are read, never the stored secrets.
+    """
+    if sys.platform != "win32":
+        return []
+    from win32ctypes.pywin32 import pywintypes, win32cred
+
+    try:
+        entries = win32cred.CredEnumerate(None, 0)
+    except pywintypes.error:
+        return []
+    suffix = f"@{service}"
+    return [
+        entry["TargetName"]
+        for entry in entries
+        if entry["Type"] == win32cred.CRED_TYPE_GENERIC and entry["TargetName"].endswith(suffix)
+    ]
+
+
+def _delete_entry(target: str) -> None:
+    """Delete one generic credential-store entry by target name (Windows only)."""
+    from win32ctypes.pywin32 import win32cred
+
+    win32cred.CredDelete(target, win32cred.CRED_TYPE_GENERIC)
+
+
+def clear_credentials(service: str) -> int:
+    """Delete every stored login for ``service``, including renamed earlier versions.
+
+    Returns
+    -------
+    int
+        Number of entries deleted.
+    """
+    deleted = 0
+    while (credential := keyring.get_credential(service, None)) is not None:
+        keyring.delete_password(service, credential.username)
+        deleted += 1
+    for target in _renamed_previous_entries(service):
+        _delete_entry(target)
+        deleted += 1
+    return deleted
+
+
+def store_credentials(service: str, username: str, password: str) -> None:
+    """Replace any stored login for ``service`` with a new one in the OS credential store."""
+    clear_credentials(service)
+    keyring.set_password(service, username, password)
+
+
 def get_credentials(service: str) -> tuple[str, str]:
     """Return the website login from the OS credential store, else from the environment.
 
@@ -71,8 +176,8 @@ def get_credentials(service: str) -> tuple[str, str]:
     if username and password:
         return username, password
     raise CredentialsError(
-        "No ENTSO-E Transparency Platform login found. Store it once (it is never shown) with:\n"
-        f"  python -m keyring set {service} <your-website-email>\n"
+        "No ENTSO-E Transparency Platform login found. Check and store it once with:\n"
+        "  uv run watervalues login\n"
         f"or set {USERNAME_ENV} and {PASSWORD_ENV}."
     )
 

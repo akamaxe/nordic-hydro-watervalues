@@ -157,5 +157,5 @@ def test_credentials_fall_back_to_environment(monkeypatch) -> None:
 
 def test_missing_credentials_explain_how_to_store_them(monkeypatch) -> None:
     monkeypatch.setattr(filelib.keyring, "get_credential", lambda service, user: None)
-    with pytest.raises(CredentialsError, match="keyring set svc"):
+    with pytest.raises(CredentialsError, match="watervalues login"):
         get_credentials("svc")
