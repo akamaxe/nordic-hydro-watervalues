@@ -51,8 +51,9 @@ select = [
     "D",        # docstrings (NumPy convention)
 ]
 ignore = [
-    "D105",  # magic methods need no docstring
-    "D107",  # __init__ is documented in the class docstring
+    "D105",   # magic methods need no docstring
+    "D107",   # __init__ is documented in the class docstring
+    "PD010",  # Series.unstack on a MultiIndex is the idiomatic reshape
 ]
 allowed-confusables = ["×", "−", "–", "·"]
 
