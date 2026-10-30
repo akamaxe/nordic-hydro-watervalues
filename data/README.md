@@ -175,8 +175,11 @@ How the model treats them:
   (their storage is known). In the inflow scenarios only (`watervalues inflow`, notebook 02),
   each gets the mean inflow of the same ISO week in the other years and is flagged `imputed`,
   which keeps 2015 as one of the eleven inflow scenarios.
-* **2021-W50 and 2022-W06** miss only solar or "other" generation. They do not affect the inflow;
-  they matter for residual demand in the price model (M3).
+* **2021-W50 and 2022-W06** miss only solar or "other" generation. They do not affect the inflow,
+  but residual demand and net import are undefined there. The price model (`watervalues price`,
+  notebook 03) leaves them out of its regression, together with 2015-W01 and 2015-W50, which lack
+  production or a price; `outputs/price_report.txt` lists the four weeks with their missing
+  columns. Nothing is imputed.
 
 | Weeks | Missing columns | Reason |
 |---|---|---|
