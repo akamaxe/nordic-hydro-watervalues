@@ -6,9 +6,11 @@ series are drawn in a recessive grey, and every figure keeps a single y-axis.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from cycler import cycler
 from matplotlib.axes import Axes
@@ -16,6 +18,9 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from watervalues.data.aggregate import per_stage
+
+if TYPE_CHECKING:
+    from watervalues.price import StageCurve
 
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
@@ -36,6 +41,8 @@ SERIES = (  # categorical slots, in this fixed order
 )
 LINE_WIDTH = 1.6
 CONTEXT_WIDTH = 0.9
+MARKER_AREA = 14  # scatter markers [pt^2]
+BOX_WIDTH = 0.35  # width of each box in a pair, in units of the category spacing
 
 
 def use_style() -> None:
@@ -273,4 +280,291 @@ def annual_inflow(annual: pd.DataFrame, dry: int, wet: int, ax: Axes | None = No
     ax.set_xlabel("ISO year (52 standard weeks)")
     ax.set_ylabel("Energy [TWh per year]")
     ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncols=2)
+    return ax
+
+
+def _span(first: int, last: int) -> str:
+    return str(first) if first == last else f"{first}-{last}"
+
+
+def price_vs_net_import(
+    table: pd.DataFrame, crisis_years: Sequence[int], ax: Axes | None = None
+) -> Axes:
+    """Weekly Swedish price against net import, coloured by period.
+
+    The periods are the years before, during and after ``crisis_years``.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Price table (see :func:`watervalues.price.price_table`) with ``iso_year``,
+        ``net_import_stage_gwh`` [GWh per 168-hour stage], ``price_se_eur_mwh`` [EUR/MWh] and
+        ``complete``; incomplete weeks are not drawn.
+    crisis_years : sequence of int
+        Years of the middle period (at least one).
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    if not crisis_years:
+        raise ValueError("crisis_years must name at least one year")
+    ax = _axes(ax, size=(7, 4.5))
+    rows = table[table["complete"]]
+    years = rows["iso_year"]
+    first, last = min(crisis_years), max(crisis_years)
+    periods = (
+        (years < first, _span(int(years.min()), first - 1)),
+        (years.isin(list(crisis_years)), _span(first, last)),
+        (years > last, _span(last + 1, int(years.max()))),
+    )
+    for (mask, label), colour in zip(periods, SERIES, strict=False):
+        if mask.any():
+            ax.scatter(
+                rows.loc[mask, "net_import_stage_gwh"],
+                rows.loc[mask, "price_se_eur_mwh"],
+                s=MARKER_AREA,
+                color=colour,
+                alpha=0.75,
+                linewidths=0,
+                label=label,
+                zorder=2,
+            )
+    ax.axvline(0, color=AXIS, linewidth=0.8, zorder=1)
+    ax.set_xlabel("Net import [GWh per week] (negative: Sweden exports)")
+    ax.set_ylabel("Swedish price [EUR/MWh]")
+    ax.legend(loc="upper left")
+    return ax
+
+
+def slope_by_year(
+    slopes: pd.DataFrame,
+    crisis_years: Sequence[int],
+    kappa_per_gwh: float | None = None,
+    ax: Axes | None = None,
+) -> Axes:
+    """Price slope of each year fitted alone against the year's mean German price.
+
+    Points are coloured by period (before, during and after ``crisis_years``), with error bars
+    of ±2 HAC standard errors. The years from the crisis on are labelled one by one; the
+    earlier years crowd at low prices and are named by the legend. With ``kappa_per_gwh``, the
+    slope of the proportional form, ``kappa * p_DE``, is drawn as a line through the origin.
+
+    Parameters
+    ----------
+    slopes : pandas.DataFrame
+        Output of :func:`watervalues.price.slope_by_year`, indexed by ISO year, with
+        ``beta_eur_mwh_per_gwh``, ``beta_se_eur_mwh_per_gwh`` [EUR/MWh per GWh] and
+        ``price_de_mean_eur_mwh`` [EUR/MWh].
+    crisis_years : sequence of int
+        Years of the middle period (at least one).
+    kappa_per_gwh : float or None
+        Slope per unit of German price of the proportional form [1/GWh].
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    if not crisis_years:
+        raise ValueError("crisis_years must name at least one year")
+    ax = _axes(ax, size=(7, 4.5))
+    years = slopes.index.to_series()
+    first, last = min(crisis_years), max(crisis_years)
+    periods = (
+        (years < first, _span(int(years.min()), first - 1)),
+        (years.isin(list(crisis_years)), _span(first, last)),
+        (years > last, _span(last + 1, int(years.max()))),
+    )
+    for (mask, label), colour in zip(periods, SERIES, strict=False):
+        rows = slopes[mask.to_numpy()]
+        if rows.empty:
+            continue
+        ax.errorbar(
+            rows["price_de_mean_eur_mwh"],
+            rows["beta_eur_mwh_per_gwh"],
+            yerr=2 * rows["beta_se_eur_mwh_per_gwh"],
+            fmt="o",
+            markersize=5,
+            color=colour,
+            elinewidth=1.0,
+            capsize=0,
+            label=f"{label}, each year fitted alone (±2 HAC SE)",
+            zorder=3,
+        )
+    for year, row in slopes[(years >= first).to_numpy()].iterrows():
+        ax.annotate(
+            str(year),
+            (row["price_de_mean_eur_mwh"], row["beta_eur_mwh_per_gwh"]),
+            xytext=(5, 4),
+            textcoords="offset points",
+            color=INK_SECONDARY,
+            fontsize=8,
+        )
+    if kappa_per_gwh is not None:
+        grid = np.linspace(0.0, slopes["price_de_mean_eur_mwh"].max(), 50)
+        ax.plot(
+            grid,
+            kappa_per_gwh * grid,
+            color=SERIES[1],
+            label=r"proportional slope $\kappa\, p_{DE}$",
+            zorder=2,
+        )
+    ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
+    ax.set_xlim(left=0)
+    ax.set_xlabel("Mean German price of the year [EUR/MWh]")
+    ax.set_ylabel("Price slope [EUR/MWh per GWh/week]")
+    ax.legend(loc="upper left")
+    return ax
+
+
+def price_fit(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
+    """Observed weekly price, the model's in-sample fit and its leave-one-year-out prediction.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        With ``week_start``, ``price_se_eur_mwh``, ``fitted_eur_mwh`` and ``loyo_eur_mwh``
+        [EUR/MWh] (the table of :class:`watervalues.price.PriceResult`).
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax)
+    x = pd.DatetimeIndex(table["week_start"])
+    ax.plot(x, table["price_se_eur_mwh"], color=SERIES[0], label="observed")
+    ax.plot(x, table["fitted_eur_mwh"], color=SERIES[1], linewidth=1.1, label="model, in-sample")
+    ax.plot(
+        x,
+        table["loyo_eur_mwh"],
+        color=SERIES[2],
+        linewidth=1.0,
+        linestyle="--",
+        label="model, year left out",
+    )
+    ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
+    ax.set_ylabel("Swedish price [EUR/MWh]")
+    ax.legend(loc="upper left", ncols=3)
+    return ax
+
+
+def residuals_over_time(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
+    """Residuals of the model over time, in-sample and with the year left out [EUR/MWh].
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        With ``week_start``, ``residual_eur_mwh`` and ``loyo_residual_eur_mwh`` (observed minus
+        model) [EUR/MWh].
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax)
+    x = pd.DatetimeIndex(table["week_start"])
+    ax.plot(
+        x,
+        table["loyo_residual_eur_mwh"],
+        color=CONTEXT,
+        linewidth=CONTEXT_WIDTH,
+        label="year left out",
+        zorder=2,
+    )
+    ax.plot(x, table["residual_eur_mwh"], color=SERIES[0], linewidth=1.0, label="in-sample")
+    ax.axhline(0, color=INK_SECONDARY, linewidth=0.8, zorder=1)
+    ax.set_ylabel("Residual, observed - model [EUR/MWh]")
+    ax.legend(loc="upper left", ncols=2)
+    return ax
+
+
+def residuals_by_season(
+    table: pd.DataFrame, seasons: Sequence[str], ax: Axes | None = None
+) -> Axes:
+    """Residuals of the model by season: in-sample and leave-one-year-out boxes [EUR/MWh].
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        With ``season``, ``residual_eur_mwh`` and ``loyo_residual_eur_mwh`` [EUR/MWh].
+    seasons : sequence of str
+        Season names, in the order to draw.
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax, size=(7, 4.5))
+    names = list(seasons)
+    positions = np.arange(len(names), dtype=float)
+    handles = []
+    for offset, column, colour, label in (
+        (-BOX_WIDTH / 2, "residual_eur_mwh", SERIES[0], "in-sample"),
+        (BOX_WIDTH / 2, "loyo_residual_eur_mwh", SERIES[1], "year left out"),
+    ):
+        data = [table.loc[table["season"] == name, column].dropna().to_numpy() for name in names]
+        boxes = ax.boxplot(
+            data,
+            positions=positions + offset,
+            widths=0.9 * BOX_WIDTH,
+            patch_artist=True,
+            medianprops={"color": INK},
+            whiskerprops={"color": INK_SECONDARY},
+            capprops={"color": INK_SECONDARY},
+            flierprops={
+                "marker": "o",
+                "markersize": 3,
+                "markerfacecolor": colour,
+                "markeredgewidth": 0,
+                "alpha": 0.6,
+            },
+        )
+        for patch in boxes["boxes"]:
+            patch.set_facecolor(colour)
+            patch.set_edgecolor(INK_SECONDARY)
+            patch.set_alpha(0.8)
+        handles.append(Patch(color=colour, label=label))
+    ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
+    ax.set_xticks(positions, names)
+    ax.set_xlabel("Season")
+    ax.set_ylabel("Residual, observed - model [EUR/MWh]")
+    ax.legend(handles=handles, loc="upper left")
+    return ax
+
+
+def stage_slopes(curves: Mapping[str, StageCurve], ax: Axes | None = None) -> Axes:
+    """Weekly slope ``b_t`` of the price curve, one line per German price profile.
+
+    Parameters
+    ----------
+    curves : mapping of str to StageCurve
+        Label to weekly curve (at most eight), e.g. the average profile and the scenario levels.
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    if len(curves) > len(SERIES):
+        raise ValueError(f"at most {len(SERIES)} curves")
+    ax = _axes(ax)
+    for (label, curve), colour in zip(curves.items(), SERIES, strict=False):
+        slope = curve.slope_eur_mwh_per_gwh
+        ax.plot(np.arange(1, len(slope) + 1), slope, color=colour, label=label)
+    ax.set_xlim(left=1)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("ISO week (model stage)")
+    ax.set_ylabel("Price slope b_t [EUR/MWh per GWh/week]")
+    ax.legend(loc="upper left", ncols=len(curves))
     return ax
