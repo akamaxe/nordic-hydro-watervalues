@@ -9,9 +9,27 @@ reservoir:
   availability: 0.85
   rmin_percentile: 5
 
-price_model:
+price_model:                  # p = alpha + season + gamma p_DE + slope N, N per 168-h stage (guide 5.2)
+  # Base model, chosen in notebook 03 by the selection rule below (`watervalues price` reports
+  # whether this choice agrees with the rule; it never changes it):
+  slope_form: proportional    # constant: slope = beta (guide) | proportional: slope = kappa p_DE
   seasonal_dummies: true
-  exclude_years: []           # e.g. [2022] for the variant without the energy crisis
+  exclude_years: []           # [] (all years) or exactly crisis_years
+  # Variants compared with the base: both slope forms, with and without seasonal dummies, with
+  # and without these years (energy crisis, SE1/SE2 decoupled from SE3/SE4).
+  crisis_years: [2021, 2022, 2023]
+  seasons: {Q1: 1, Q2: 14, Q3: 27, Q4: 40}   # first ISO week: calendar quarters; Q1 is the reference
+  # Newey-West (Bartlett) standard errors: the residual autocorrelation lasts about a quarter.
+  hac_maxlags: 13             # [weeks]
+  hac_lag_sensitivity: [4, 13, 26, 52]   # [weeks] slope t-value reported at each
+  residual_acf_lags: [1, 4, 13, 26]      # [weeks]
+  # Selection rule: lowest pooled leave-one-year-out RMSE of the weekly price; variants within
+  # this tolerance tie and the smallest out-of-sample seasonal bias wins, then fewer parameters.
+  selection_tolerance_eur_mwh: 0.5
+  weekly_csv: outputs/price_weekly.csv       # regression table, fitted and LOYO prices per week
+  variants_csv: outputs/price_variants.csv   # the variant comparison
+  curve_json: outputs/price_curve.json       # the base curve read by the SDP
+  report: outputs/price_report.txt
 
 sdp:
   n_storage_points: 201
