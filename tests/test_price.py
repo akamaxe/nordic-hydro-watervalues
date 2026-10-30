@@ -1,5 +1,6 @@
 """Tests for the price curve and the cost function (synthetic data, offline)."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -18,10 +19,13 @@ from watervalues.price import (
     CurveSpec,
     PriceError,
     StageCurve,
+    Variant,
     build_price,
+    compare_variants,
     de_price_profile,
     fit_curve,
     load_curve,
+    loyo_accuracy,
     loyo_predictions,
     price_table,
     save_curve,
@@ -162,6 +166,35 @@ def test_non_positive_slope_stops(drivers, slope_form) -> None:
     table = synthetic_table(drivers, slope_form, False, -SLOPE[slope_form])
     with pytest.raises(PriceError, match="slope"):
         fit_curve(table, spec_of(slope_form, False), LAGS)
+
+
+def test_loyo_refits_stop_on_a_non_positive_slope(drivers) -> None:
+    cal, net_import, price_de, noise = drivers
+    # The slope is positive in 2021 only: positive when pooled, negative in the refit without 2021.
+    slope = np.where(cal["iso_year"] == LAST, 0.3, -0.02)
+    price = ALPHA + GAMMA * price_de + slope * net_import + noise
+    table = price_table(synthetic_weekly(net_import, price_de, price), SEASONS)
+    spec = spec_of("constant", False)
+    assert fit_curve(table, spec, LAGS).slope_coefficient > 0
+    with pytest.raises(PriceError, match=f"without {LAST}"):
+        loyo_predictions(table, spec, LAGS)
+
+
+def test_standard_errors_are_newey_west(drivers) -> None:
+    cal, net_import, price_de, _ = drivers
+    price, residual = synthetic_prices(drivers, "proportional", True, KAPPA)
+    table = price_table(synthetic_weekly(net_import, price_de, price), SEASONS)
+    curve = fit_curve(table, spec_of("proportional", True), LAGS)
+    # Bartlett-kernel Newey-West covariance without small-sample correction, by hand.
+    x = design(cal, net_import, price_de, "proportional", True)
+    scores = x * residual[:, None]
+    meat = scores.T @ scores
+    for lag in range(1, LAGS + 1):
+        cross = scores[lag:].T @ scores[:-lag]
+        meat += (1 - lag / (LAGS + 1)) * (cross + cross.T)
+    bread = np.linalg.inv(x.T @ x)
+    by_hand = np.sqrt(np.diag(bread @ meat @ bread))
+    np.testing.assert_allclose([curve.std_errors[t] for t in curve.spec.terms], by_hand, rtol=1e-8)
 
 
 def test_committed_dataset_has_positive_slopes_in_every_variant(committed) -> None:
@@ -343,6 +376,34 @@ def test_de_price_profile_and_levels(drivers) -> None:
     np.testing.assert_allclose(scaled / profile, 80.0 / profile.mean())
 
 
+def test_loyo_accuracy_on_hand_made_errors() -> None:
+    errors = pd.Series([1.0, -1.0, 3.0, -3.0, 2.0, np.nan])
+    season = pd.Series(["Q1", "Q1", "Q2", "Q2", "Q3", "Q3"])
+    before = pd.Series([True, True, True, False, False, False])
+    scores = loyo_accuracy(errors, season, {"before": before, "after": ~before})
+    assert scores["loyo_rmse_eur_mwh"] == pytest.approx(np.sqrt(24 / 5))  # the gap is skipped
+    assert scores["loyo_rmse_before_eur_mwh"] == pytest.approx(np.sqrt(11 / 3))
+    assert scores["loyo_rmse_after_eur_mwh"] == pytest.approx(np.sqrt(13 / 2))
+    assert scores["loyo_season_bias_eur_mwh"] == pytest.approx(2.0)  # Q3; Q1 and Q2 average 0
+
+
+def test_variants_must_be_scored_on_the_same_weeks(drivers) -> None:
+    table = synthetic_table(drivers, "proportional", False, KAPPA)
+    variants = {}
+    for slope_form in ("constant", "proportional"):
+        spec = spec_of(slope_form, False)
+        variants[spec.label] = Variant(
+            fit_curve(table, spec, LAGS), loyo_predictions(table, spec, LAGS)
+        )
+    assert len(compare_variants(table, variants, [LAST])) == 2
+    label = list(variants)[1]
+    loyo = variants[label].loyo_eur_mwh.copy()
+    loyo.iloc[:10] = np.nan
+    variants[label] = Variant(variants[label].curve, loyo)
+    with pytest.raises(PriceError, match="other weeks"):
+        compare_variants(table, variants, [LAST])
+
+
 def test_selection_rule() -> None:
     comparison = pd.DataFrame(
         {
@@ -372,6 +433,36 @@ def test_curve_json_round_trip(tmp_path, drivers) -> None:
     )
 
 
+def test_load_curve_rejects_a_broken_file(tmp_path, drivers) -> None:
+    table = synthetic_table(drivers, "proportional", False, KAPPA)
+    good = fit_curve(table, spec_of("proportional", False), LAGS).to_dict()
+    without_gamma = {name: value for name, value in good["params"].items() if name != "gamma"}
+    broken = {
+        "slope": {**good, "params": {**good["params"], "kappa": -1e-4}},
+        "coefficients": {**good, "params": without_gamma},
+        "standard errors": {**good, "std_errors": {**good["std_errors"], "beta": 1.0}},
+        "units": {**good, "units": {**good["units"], "kappa": "EUR/MWh"}},
+    }
+    path = tmp_path / "price_curve.json"
+    for message, raw in broken.items():
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(PriceError, match=message):
+            load_curve(path)
+
+
+@pytest.mark.parametrize("slope_form", ["constant", "proportional"])
+def test_de_pass_through_is_the_derivative_in_the_german_price(drivers, slope_form) -> None:
+    table = synthetic_table(drivers, slope_form, True, SLOPE[slope_form])
+    curve = fit_curve(table, spec_of(slope_form, True), LAGS)
+    probe = table.head(20)
+    shifted = probe.assign(price_de_eur_mwh=probe["price_de_eur_mwh"] + 1.0)
+    derivative = curve.predict_eur_mwh(shifted) - curve.predict_eur_mwh(probe)  # linear in p_DE
+    np.testing.assert_allclose(
+        curve.de_pass_through(probe["net_import_stage_gwh"]), derivative, rtol=1e-9
+    )
+    assert (curve.kappa_per_gwh is None) == (slope_form == "constant")
+
+
 # --- Committed dataset and CLI ------------------------------------------------------------------
 
 
@@ -388,6 +479,11 @@ def test_committed_dataset_drops_only_documented_gaps(committed) -> None:
     assert (table["status"] == "used").sum() == committed.base.nobs
     assert committed.comparison["configured_base"].sum() == 1
     assert committed.comparison["selected"].sum() == 1
+
+
+def test_configured_base_model_follows_the_selection_rule(committed) -> None:
+    # If new data makes the rule pick another variant, config must be changed deliberately.
+    assert committed.selected == committed.base.spec.label
 
 
 def _config_with(tmp_path, **sections: dict) -> str:

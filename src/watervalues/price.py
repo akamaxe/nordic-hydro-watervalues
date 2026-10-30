@@ -425,6 +425,31 @@ class PriceCurve:
         """HAC t-value of each coefficient [-]."""
         return {name: self.params[name] / self.std_errors[name] for name in self.params}
 
+    @property
+    def kappa_per_gwh(self) -> float | None:
+        """``kappa`` of the proportional form [1/GWh]; None for the constant form."""
+        return self.params[KAPPA] if self.spec.slope_form == "proportional" else None
+
+    def de_pass_through(self, net_import_gwh: ArrayLike) -> np.ndarray:
+        """Change of the Swedish price per unit change of the German price, at a net import.
+
+        ``dp/dp_DE = gamma + kappa N`` for the proportional form and ``gamma`` for the constant
+        form.
+
+        Parameters
+        ----------
+        net_import_gwh : array_like
+            Net import [GWh per 168-hour stage].
+
+        Returns
+        -------
+        numpy.ndarray
+            Pass-through [EUR/MWh per EUR/MWh = -], shaped like ``net_import_gwh``.
+        """
+        net_import = np.asarray(net_import_gwh, dtype=float)
+        kappa = self.kappa_per_gwh if self.kappa_per_gwh is not None else 0.0
+        return self.gamma + kappa * net_import
+
     def predict_eur_mwh(self, table: pd.DataFrame) -> pd.Series:
         """Price predicted for each row of a table like :func:`price_table` [EUR/MWh].
 
@@ -492,21 +517,30 @@ class PriceCurve:
 
     @classmethod
     def from_dict(cls, raw: Mapping) -> PriceCurve:
-        """Inverse of :meth:`to_dict`; checks the coefficients and the slope.
+        """Inverse of :meth:`to_dict`; checks the coefficients, their units and the slope.
 
         Raises
         ------
         PriceError
-            If the coefficients do not match the variant or the slope is <= 0.
+            If the coefficients or standard errors do not match the variant's terms, a stated
+            unit differs from :data:`UNITS`, or the slope is <= 0.
         """
         spec = CurveSpec.from_dict(raw["spec"])
         params = {name: float(value) for name, value in raw["params"].items()}
-        if set(params) != set(spec.terms):
-            raise PriceError(f"coefficients {sorted(params)} do not match {spec.label}")
+        std_errors = {name: float(value) for name, value in raw["std_errors"].items()}
+        for what, names in (("coefficients", params), ("standard errors", std_errors)):
+            if set(names) != set(spec.terms):
+                raise PriceError(f"{what} {sorted(names)} do not match {spec.label}")
+        expected_units = {
+            name: UNITS[SEASON_PREFIX if name.startswith(SEASON_PREFIX) else name]
+            for name in spec.terms
+        }
+        if raw.get("units", expected_units) != expected_units:
+            raise PriceError(f"units {raw['units']} differ from {expected_units}")
         curve = cls(
             spec=spec,
             params=params,
-            std_errors={name: float(value) for name, value in raw["std_errors"].items()},
+            std_errors=std_errors,
             hac_maxlags=int(raw["hac_maxlags"]),
             nobs=int(raw["nobs"]),
             years=tuple(int(year) for year in raw["years"]),
@@ -532,6 +566,11 @@ def _check_slope(curve: PriceCurve) -> None:
 def fit_curve(table: pd.DataFrame, spec: CurveSpec, hac_maxlags: int) -> PriceCurve:
     """Fit one variant of the price curve by OLS, with HAC standard errors.
 
+    The Newey-West standard errors and the Durbin-Watson statistic treat the fitted weeks as one
+    series: a dropped week, or an excluded block of years, joins the weeks on either side as
+    neighbours. Only the reported standard errors of the variants without the crisis years
+    are affected noticeably; the coefficients and predictions are not.
+
     Parameters
     ----------
     table : pandas.DataFrame
@@ -539,7 +578,8 @@ def fit_curve(table: pd.DataFrame, spec: CurveSpec, hac_maxlags: int) -> PriceCu
     spec : CurveSpec
         The variant (slope form, seasons, excluded years).
     hac_maxlags : int
-        Lags of the Newey-West standard errors [weeks].
+        Lags of the Newey-West standard errors [weeks] (Bartlett kernel, no small-sample
+        correction).
 
     Returns
     -------
@@ -684,13 +724,40 @@ def _periods(years: pd.Series, crisis_years: Sequence[int]) -> dict[str, pd.Seri
     }
 
 
+def loyo_accuracy(
+    errors: pd.Series, season: pd.Series, periods: Mapping[str, pd.Series]
+) -> dict[str, float]:
+    """Out-of-sample accuracy of one variant from its LOYO errors.
+
+    Parameters
+    ----------
+    errors : pandas.Series
+        Observed minus leave-one-year-out price [EUR/MWh]; missing values are skipped.
+    season : pandas.Series
+        Season of each week, aligned with ``errors``.
+    periods : mapping of str to pandas.Series
+        Boolean masks of sub-periods (e.g. before, during and after the crisis years).
+
+    Returns
+    -------
+    dict of str to float
+        ``loyo_rmse_eur_mwh`` (pooled), ``loyo_rmse_<period>_eur_mwh`` for each period and
+        ``loyo_season_bias_eur_mwh``, the largest absolute mean error of a season [EUR/MWh].
+    """
+    return {
+        "loyo_rmse_eur_mwh": _rmse(errors),
+        **{f"loyo_rmse_{name}_eur_mwh": _rmse(errors[mask]) for name, mask in periods.items()},
+        "loyo_season_bias_eur_mwh": float(errors.groupby(season).mean().abs().max()),
+    }
+
+
 def compare_variants(
     table: pd.DataFrame, variants: Mapping[str, Variant], crisis_years: Sequence[int]
 ) -> pd.DataFrame:
     """Coefficients, fit statistics and out-of-sample accuracy of every variant.
 
-    The out-of-sample errors (observed minus LOYO price) cover the same complete weeks for
-    every variant, so their RMSEs compare; in-sample R2 does not, across different samples.
+    The out-of-sample errors (observed minus LOYO price) must cover the same weeks for every
+    variant, so their RMSEs compare; in-sample R2 does not, across different samples.
 
     Parameters
     ----------
@@ -709,7 +776,17 @@ def compare_variants(
         ``resid_std_eur_mwh``, ``durbin_watson``, ``bic``, ``loyo_rmse_eur_mwh`` (pooled) and
         per period (``loyo_rmse_before_eur_mwh`` etc.) [EUR/MWh], and
         ``loyo_season_bias_eur_mwh``: the largest absolute mean LOYO error of a season [EUR/MWh].
+
+    Raises
+    ------
+    PriceError
+        If the variants' LOYO predictions do not cover the same weeks.
     """
+    scored = {label: v.loyo_eur_mwh.notna().to_numpy() for label, v in variants.items()}
+    reference = next(iter(scored.values()))
+    differing = [label for label, mask in scored.items() if not np.array_equal(mask, reference)]
+    if differing:
+        raise PriceError(f"variants scored on other weeks than the first: {differing}")
     price = table["price_se_eur_mwh"]
     periods = _periods(table["iso_year"], crisis_years)
     terms = list(dict.fromkeys(t for v in variants.values() for t in v.curve.spec.terms))
@@ -734,11 +811,7 @@ def compare_variants(
                 "resid_std_eur_mwh": curve.resid_std_eur_mwh,
                 "durbin_watson": curve.durbin_watson,
                 "bic": curve.bic,
-                "loyo_rmse_eur_mwh": _rmse(errors),
-                **{f"loyo_rmse_{p}_eur_mwh": _rmse(errors[mask]) for p, mask in periods.items()},
-                "loyo_season_bias_eur_mwh": float(
-                    errors.groupby(table["season"]).mean().abs().max()
-                ),
+                **loyo_accuracy(errors, table["season"], periods),
             }
         )
     return pd.DataFrame(rows).set_index("label")
@@ -996,7 +1069,8 @@ def price_report(
         "  slope: constant = beta [EUR/MWh per GWh] | proportional = kappa p_DE, kappa [1/GWh]",
         "  cost of covering N in stage t: C_t(N) = a_t N + b_t/2 N^2 [kEUR], "
         "a_t = alpha + season_t + gamma p_DE,t",
-        f"  OLS; HAC (Newey-West, Bartlett) standard errors with {pm.hac_maxlags} lags [weeks]",
+        f"  OLS; HAC (Newey-West, Bartlett) standard errors with {pm.hac_maxlags} lags [weeks]; "
+        "the weeks on either side of a gap or of excluded years count as neighbours",
         f"  seasons: {season_text} (the first is the reference)",
     ]
 
