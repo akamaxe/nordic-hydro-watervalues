@@ -409,18 +409,22 @@ def _config_with(tmp_path, **sections: dict) -> str:
     return str(path)
 
 
-def test_cli_solve_writes_the_outputs(tmp_path, base) -> None:
-    _, solution, _ = base
+def test_cli_solve_writes_the_outputs(tmp_path) -> None:
+    points = 21  # coarse: the command's path is under test here, not the grid
     outputs = {
         "values_npz": str(tmp_path / "water_values.npz"),
         "water_values_csv": str(tmp_path / "water_values.csv"),
         "report": str(tmp_path / "sdp_report.txt"),
     }
-    result = CliRunner().invoke(app, ["solve", "--config", _config_with(tmp_path, sdp=outputs)])
+    config = _config_with(tmp_path, sdp={**outputs, "n_storage_points": points})
+    result = CliRunner().invoke(app, ["solve", "--config", config])
     assert result.exit_code == 0, result.output
+    cfg = load_config(config)
+    problem = build_problem(cfg, load_weekly(PROJECT_ROOT / cfg.data.weekly_csv))
+    expected = solve(problem, cfg.sdp.tol_eur_mwh, cfg.sdp.max_cycles)
     loaded = load_solution(tmp_path / "water_values.npz")
-    np.testing.assert_allclose(loaded.water_value_eur_mwh, solution.water_value_eur_mwh)
+    np.testing.assert_allclose(loaded.water_value_eur_mwh, expected.water_value_eur_mwh)
     table = pd.read_csv(outputs["water_values_csv"])
     assert {"iso_week", "storage_gwh", "filling_pct", "water_value_eur_mwh"} <= set(table.columns)
-    assert len(table) == MODEL_WEEKS_PER_YEAR * SDP.n_storage_points
+    assert len(table) == MODEL_WEEKS_PER_YEAR * points
     assert "converged" in (tmp_path / "sdp_report.txt").read_text(encoding="utf-8")

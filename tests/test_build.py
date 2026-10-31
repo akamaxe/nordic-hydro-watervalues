@@ -108,9 +108,15 @@ def synthetic(tmp_path_factory):
     return cfg, inflow_gwh, hydro_gwh
 
 
-def test_build_follows_the_contract(synthetic) -> None:
+@pytest.fixture(scope="module")
+def built(synthetic):
+    """One build of the synthetic cache, shared by the tests that only read it."""
     cfg, _, _ = synthetic
-    weekly = build_weekly(cfg).weekly
+    return build_weekly(cfg)
+
+
+def test_build_follows_the_contract(built) -> None:
+    weekly = built.weekly
     assert tuple(weekly.columns) == WEEKLY_COLUMNS
     assert len(weekly) == 104
     assert weekly["hours"].tolist().count(336) == 1  # 2020-W52 absorbs W53
@@ -119,9 +125,9 @@ def test_build_follows_the_contract(synthetic) -> None:
     assert (weekly["solar_gwh"] == 0).all()  # no solar type in this area: structural zero
 
 
-def test_storage_is_continuous_and_inflow_is_recovered(synthetic) -> None:
-    cfg, inflow, hydro = synthetic
-    weekly = build_weekly(cfg).weekly
+def test_storage_is_continuous_and_inflow_is_recovered(synthetic, built) -> None:
+    _, inflow, hydro = synthetic
+    weekly = built.weekly
     np.testing.assert_allclose(weekly["storage_end_gwh"].iloc[:-1], weekly["storage_gwh"].iloc[1:])
     implied = weekly["storage_end_gwh"] - weekly["storage_gwh"] + weekly["hydro_gwh"]
     expected = np.append(inflow[:103], inflow[103] + inflow[104])  # folded 2020-W52 + W53
@@ -129,9 +135,8 @@ def test_storage_is_continuous_and_inflow_is_recovered(synthetic) -> None:
     np.testing.assert_allclose(weekly["hydro_gwh"].iloc[:103], hydro[:103])
 
 
-def test_prices_and_energies(synthetic) -> None:
-    cfg, _, _ = synthetic
-    weekly = build_weekly(cfg).weekly
+def test_prices_and_energies(built) -> None:
+    weekly = built.weekly
     expected_se = sum(ZONE_SHARE[z] * ZONE_PRICE[z] for z in ZONE_SHARE)
     np.testing.assert_allclose(weekly["price_se_eur_mwh"], expected_se)
     np.testing.assert_allclose(weekly["price_se3_eur_mwh"], 40.0)
@@ -140,9 +145,8 @@ def test_prices_and_energies(synthetic) -> None:
     np.testing.assert_allclose(weekly["nuclear_gwh"] / weekly["hours"], 6.0)
 
 
-def test_reservoir_evidence_is_reported(synthetic) -> None:
-    cfg, _, _ = synthetic
-    result = build_weekly(cfg)
+def test_reservoir_evidence_is_reported(built) -> None:
+    result = built
     assert result.evidence.best.value == "end_of_week"
     assert any("Reservoir convention" in line for line in result.report)
     assert any("vs its one-week shift (start_of_week)" in line for line in result.report)
@@ -150,9 +154,9 @@ def test_reservoir_evidence_is_reported(synthetic) -> None:
     assert "  B12 Hydro Water Reservoir: 2018-12-31 00:00 to 2021-01-03 23:00" in result.report
 
 
-def test_report_checks_prices_and_zone_loads_on_comparable_weeks(synthetic) -> None:
+def test_report_checks_prices_and_zone_loads_on_comparable_weeks(synthetic, built) -> None:
     cfg, _, _ = synthetic
-    result = build_weekly(cfg)
+    result = built
     assert any(
         line.endswith("between the zones' load-weighted prices: 104 of 104 weeks")
         for line in result.report
@@ -199,9 +203,8 @@ def test_data_digest_depends_on_content_not_on_order() -> None:
     assert data_digest({("load", "SE"): a}) != data_digest({("load", "SE"): a + 1})
 
 
-def test_csv_round_trip_and_missing_value_check(synthetic, tmp_path) -> None:
-    cfg, _, _ = synthetic
-    weekly = build_weekly(cfg).weekly
+def test_csv_round_trip_and_missing_value_check(built, tmp_path) -> None:
+    weekly = built.weekly
     path = tmp_path / "weekly.csv"
     write_weekly_csv(weekly, path, "%.3f")
     assert b"\r\n" not in path.read_bytes()
@@ -256,9 +259,9 @@ def test_reported_spans_ignore_rows_without_a_value() -> None:
     assert spans.loc["B16", "max"] == times[2]
 
 
-def test_inflow_of_a_folded_week_is_computed_before_scaling(synthetic) -> None:
-    cfg, inflow, _ = synthetic
-    weekly = derived_columns(build_weekly(cfg).weekly)
+def test_inflow_of_a_folded_week_is_computed_before_scaling(synthetic, built) -> None:
+    _, inflow, _ = synthetic
+    weekly = derived_columns(built.weekly)
     stage = per_stage(weekly, ["hydro_gwh", "inflow_gwh"])
     folded = weekly["hours"] == 336
     np.testing.assert_allclose(

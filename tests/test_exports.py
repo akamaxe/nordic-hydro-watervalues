@@ -1,5 +1,6 @@
 """Tests for parsing File Library exports and fetching them into the cache (synthetic files)."""
 
+import functools
 import io
 import zipfile
 
@@ -7,9 +8,10 @@ import pandas as pd
 import pytest
 
 from watervalues.config import AreaSpec, PriceFilterConfig, load_config
-from watervalues.data import exports
+from watervalues.data import exports, fetch
 from watervalues.data.cache import read_dataset
 from watervalues.data.fetch import dataset_areas, fetch_filelib, period_bounds
+from watervalues.data.filelib import RateLimiter
 
 SE = AreaSpec(eic="10YSE-1--------K", area_type="CTA/CTY")
 SE1 = AreaSpec(eic="10Y1001A1001A44P", area_type="BZN")
@@ -159,7 +161,10 @@ def load_zip(rows: list[dict]) -> bytes:
     return buffer.getvalue()
 
 
-def test_fetch_writes_deduplicated_yearly_partitions(tmp_path) -> None:
+def test_fetch_writes_deduplicated_yearly_partitions(tmp_path, monkeypatch) -> None:
+    # Record the rate limiter's waits instead of sleeping through them (2 s each).
+    waits: list[float] = []
+    monkeypatch.setattr(fetch, "RateLimiter", functools.partial(RateLimiter, sleep=waits.append))
     cfg = load_config()
     data = cfg.data.model_copy(update={"raw_dir": tmp_path})
     cfg = cfg.model_copy(update={"data": data})
@@ -191,6 +196,7 @@ def test_fetch_writes_deduplicated_yearly_partitions(tmp_path) -> None:
         }
     )
     summary = fetch_filelib(cfg, ["load"], client=server, progress=lambda _: None)
+    assert len(waits) == 2  # the listing and two downloads: every request after the first waits
     assert summary["load"]["SE1"].rows == 2
     assert summary["load"]["SE1"].revisions.duplicates == 1
     cached = read_dataset(tmp_path, "filelib", "load", "SE1")
