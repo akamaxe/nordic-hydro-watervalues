@@ -123,6 +123,15 @@ class FiguresConfig(_Section):
     dir: Path
 
 
+class FindingsConfig(_Section):
+    """Where `watervalues findings` writes the README's key numbers, and what it quotes."""
+
+    numbers_json: Path
+    readme: Path
+    scarce_point: tuple[int, float]  # ISO week, storage [%]
+    full_point: tuple[int, float]
+
+
 class InflowConfig(_Section):
     """Inflow reconstruction from the reservoir energy balance, and its outputs."""
 
@@ -289,6 +298,7 @@ class AppConfig(_Section):
     simulation: SimulationConfig
     scenarios: ScenariosConfig
     figures: FiguresConfig
+    findings: FindingsConfig
     inflow: InflowConfig
     data: DataConfig
 

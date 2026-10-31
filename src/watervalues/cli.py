@@ -265,6 +265,23 @@ def figures(config: ConfigOption = None) -> None:
 
 
 @app.command()
+def findings(config: ConfigOption = None) -> None:
+    """Write the README's key findings from outputs/ (and reports/key_numbers.json)."""
+    from watervalues.findings import FindingsError, render, write_findings
+    from watervalues.price import PriceError
+    from watervalues.sdp import SdpError
+
+    cfg = load_config(config)
+    try:
+        numbers = write_findings(cfg)
+    except (FindingsError, PriceError, SdpError) as exc:
+        typer.echo(f"Findings stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(render(numbers))
+    typer.echo(f"\nWrote {cfg.findings.numbers_json} and the key findings of {cfg.findings.readme}")
+
+
+@app.command()
 def notebooks() -> None:
     """Execute every notebook in notebooks/ in order, in place, so outputs are up to date."""
     import nbformat
