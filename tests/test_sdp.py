@@ -20,6 +20,7 @@ from watervalues.sdp import (
     build_problem,
     checks,
     compare_solutions,
+    de_price_levels,
     first_order_check,
     grid_resolution_eur_mwh,
     grid_sensitivity,
@@ -59,30 +60,57 @@ def toy_problem(
     )
 
 
+def rough_problem(scenarios: int = 2, seed: int = 1) -> SdpProblem:
+    """A small problem where the bounds bind: big inflows that force spill from a full
+    reservoir, and a price curve that goes below zero well before full release."""
+    rng = np.random.default_rng(seed)
+    inflow = rng.uniform(100.0, 900.0, (4, scenarios))
+    inflow[1] = rng.uniform(2_000.0, 2_600.0, scenarios)  # a flood week
+    return SdpProblem(
+        storage_gwh=np.linspace(0.0, 2_000.0, 21),
+        inflow_gwh=inflow,
+        probability=np.full(scenarios, 1.0 / scenarios),
+        residual_demand_gwh=np.full(4, 800.0),
+        release_min_gwh=np.full(4, 100.0),
+        release_max_gwh=np.full(4, 1_500.0),
+        intercept_eur_mwh=rng.uniform(10.0, 20.0, 4),
+        slope_eur_mwh_per_gwh=np.full(4, 0.05),  # price < 0 beyond about 1,000 GWh of release
+        spill_penalty_eur_mwh=0.01,
+        discount=0.99,
+    )
+
+
 def loop_dp(problem: SdpProblem, terminal_keur: np.ndarray) -> np.ndarray:
-    """Deterministic DP (one inflow scenario) with plain loops, independent of the solver."""
+    """Expected cost-to-go by plain loops, minimising over the release/spill split by brute force.
+
+    For each storage now, scenario and storage next, the water let out ``X`` is fixed; the
+    release is searched on a dense grid between its bounds and the rest is spilled.
+    Independent of the solver's vectorisation and of its closed-form split.
+    """
     s = problem.storage_gwh
-    stages = len(problem.residual_demand_gwh)
+    stages, scenarios = problem.inflow_gwh.shape
     value = np.zeros((stages + 1, len(s)))
     value[stages] = terminal_keur
     for t in reversed(range(stages)):
-        inflow = problem.inflow_gwh[t, 0]
         for k, storage in enumerate(s):
-            best = np.inf
-            for k2, storage_next in enumerate(s):
-                released = storage + inflow - storage_next
-                if released < min(problem.release_min_gwh[t], storage + inflow):
-                    continue
-                release = min(released, problem.release_max_gwh[t])
-                spill = released - release
-                cost = quadratic_cost_keur(
-                    problem.residual_demand_gwh[t] - release,
-                    problem.intercept_eur_mwh[t],
-                    problem.slope_eur_mwh_per_gwh[t],
-                )
-                cost += problem.spill_penalty_eur_mwh * spill  # GWh x EUR/MWh = kEUR
-                best = min(best, cost + problem.discount * value[t + 1, k2])
-            value[t, k] = best
+            for j in range(scenarios):
+                available = storage + problem.inflow_gwh[t, j]
+                best = np.inf
+                for k2, storage_next in enumerate(s):
+                    let_out = available - storage_next
+                    lower = min(problem.release_min_gwh[t], available)
+                    upper = min(let_out, problem.release_max_gwh[t])
+                    if let_out < lower or upper < lower:
+                        continue
+                    release = np.linspace(lower, upper, 2_001)
+                    cost = quadratic_cost_keur(
+                        problem.residual_demand_gwh[t] - release,
+                        problem.intercept_eur_mwh[t],
+                        problem.slope_eur_mwh_per_gwh[t],
+                    )
+                    cost += problem.spill_penalty_eur_mwh * (let_out - release)  # kEUR
+                    best = min(best, cost.min() + problem.discount * value[t + 1, k2])
+                value[t, k] += problem.probability[j] * best
     return value
 
 
@@ -98,10 +126,41 @@ def base():
 
 
 def test_one_scenario_matches_deterministic_dp() -> None:
-    problem = toy_problem(scenarios=1)
-    terminal = -40.0 * problem.storage_gwh  # stored water is worth 40 EUR/MWh at the end
+    for problem in (toy_problem(scenarios=1), rough_problem(scenarios=1)):
+        terminal = -40.0 * problem.storage_gwh  # stored water is worth 40 EUR/MWh at the end
+        result = backward_pass(problem, terminal).value_keur
+        reference = loop_dp(problem, terminal)
+        # The reference searches a dense grid of releases, so it can only be a hair higher.
+        assert (result <= reference + 1e-9).all()
+        np.testing.assert_allclose(result, reference, rtol=1e-6)
+
+
+def test_vectorised_stages_match_brute_force_with_spill_and_negative_prices() -> None:
+    problem = rough_problem(scenarios=3)
+    terminal = -20.0 * problem.storage_gwh
     result = backward_pass(problem, terminal)
-    np.testing.assert_allclose(result.value_keur, loop_dp(problem, terminal), rtol=1e-12)
+    np.testing.assert_allclose(result.value_keur, loop_dp(problem, terminal), rtol=1e-6)
+    assert result.spill_gwh.max() > 0  # the flood week spills
+
+
+def test_water_values_are_never_below_minus_the_spill_penalty(base) -> None:
+    # Spilling is always possible, so one more MWh can cost at most the spill penalty.
+    for solution in (base[1], solve(rough_problem(), SDP.tol_eur_mwh, SDP.max_cycles)):
+        floor = -solution.problem.spill_penalty_eur_mwh
+        assert solution.water_value_eur_mwh.min() >= floor - 1e-6
+
+
+def test_negative_prices_are_avoided_by_spilling() -> None:
+    # From a full reservoir in the flood week the release stops where the price reaches -c_sp
+    # and the rest is spilled, instead of producing at a loss up to the turbine capacity.
+    problem = rough_problem(scenarios=1)
+    result = backward_pass(problem, np.zeros(len(problem.storage_gwh)))
+    t, full = 1, len(problem.storage_gwh) - 1
+    a, b = problem.intercept_eur_mwh[t], problem.slope_eur_mwh_per_gwh[t]
+    no_loss = problem.residual_demand_gwh[t] + (a + problem.spill_penalty_eur_mwh) / b
+    assert no_loss < problem.release_max_gwh[t]
+    assert result.release_gwh[t, full, 0] == pytest.approx(no_loss)
+    assert result.spill_gwh[t, full, 0] > 0
 
 
 def test_water_values_do_not_increase_with_storage(base) -> None:
@@ -235,11 +294,8 @@ def test_first_order_condition_holds_on_the_grid(base) -> None:
     interior = check["interior"]
     assert interior.sum() > 1_000
     price = check["price"][interior]
-    # Stage 52 was solved against the previous cycle's stage-1 value, which differs from the
-    # final one by less than the convergence tolerance on water values.
-    slack = SDP.tol_eur_mwh
-    assert (price >= check["lower"][interior] - slack).all()
-    assert (price <= check["upper"][interior] + slack).all()
+    assert (price >= check["lower"][interior] - 1e-6).all()
+    assert (price <= check["upper"][interior] + 1e-6).all()
 
 
 def test_checks_summarise_the_base_case(base) -> None:
@@ -247,8 +303,11 @@ def test_checks_summarise_the_base_case(base) -> None:
     found = checks(solution)
     assert found["rising_cells"] == 0
     assert found["interior_decisions"] > 1_000
-    assert found["within_bracket_share"] > 0.99  # stage 52 may miss it by the tolerance
+    assert found["within_bracket_share"] == 1.0
     assert found["median_gap_eur_mwh"] < 2 * found["resolution_eur_mwh"]
+    assert found["min_water_value_eur_mwh"] >= -solution.problem.spill_penalty_eur_mwh - 1e-6
+    assert 1 <= found["max_rise_week"] <= MODEL_WEEKS_PER_YEAR
+    assert 0 <= found["max_rise_filling_pct"] <= 100
 
 
 def test_compare_solutions_tabulates_checks_and_points(base) -> None:
@@ -325,6 +384,9 @@ def test_base_de_price_profile_takes_the_shape_without_the_crisis() -> None:
     shape = de_price_profile(table, years=calm)
     np.testing.assert_allclose(profile / shape, profile.mean() / shape.mean())
     assert base_de_price_profile(CFG, table, level_eur_mwh=80.0).mean() == pytest.approx(80.0)
+    levels = de_price_levels(CFG, table)
+    assert levels["all_years"] == pytest.approx(profile.mean())
+    assert levels["without_crisis"] == pytest.approx(shape.mean())
 
 
 def _config_with(tmp_path, **sections: dict) -> str:

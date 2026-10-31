@@ -53,6 +53,7 @@ from watervalues.units import (
 
 _PROBABILITY_TOL = 1e-9  # numerical tolerance of the sum of probabilities
 _GRID_RTOL = 1e-9  # numerical tolerance of a uniform grid step
+_VALUE_TOL = 1e-6  # numerical tolerance of the lowest water value [EUR/MWh]
 _ARRAYS = (
     "storage_gwh",
     "inflow_gwh",
@@ -168,10 +169,17 @@ def _stage(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Optimal decisions of stage ``t`` for every storage level and scenario.
 
-    On a uniform grid the water released, ``R + Sp = S_k + I_j - S_k'``, depends only on
+    On a uniform grid the water let out, ``X = R + Sp = S_k + I_j - S_k'``, depends only on
     ``d = k - k'`` and the scenario. The immediate cost is therefore computed once per
     ``(d, j)`` and gathered into the ``(K, J, K')`` array of candidates (storage now,
     scenario, storage next), to which the discounted value of ``S'`` is added.
+
+    Release and spill are both decisions. For a given ``X`` the cost
+    ``C_t(D_t - R) + c_sp (X - R)`` is convex in ``R`` and smallest where the price equals
+    ``-c_sp``, at ``R = D_t + (a_t + c_sp) / b_t``; the optimal release is that point clipped
+    to ``[R_min_t, min(X, R_max)]``. While prices are positive this is ``min(X, R_max)``: spill
+    only above turbine capacity. When the price curve would go below ``-c_sp``, spilling the
+    rest is cheaper than producing it.
     """
     s = problem.storage_gwh
     points = len(s)
@@ -179,7 +187,17 @@ def _stage(
     released = (
         np.arange(1 - points, points)[:, None] * (s[1] - s[0]) + problem.inflow_gwh[t][None, :]
     )  # (2K - 1, J): R + Sp for d = k - k' [GWh]
-    release = np.minimum(released, problem.release_max_gwh[t])
+    # Release at which one more MWh would sell below -c_sp, then clipped to the bounds; with
+    # X < R_min (only allowed for S' = 0, below) this gives R = X: everything is produced.
+    no_loss = (
+        problem.residual_demand_gwh[t]
+        + (problem.intercept_eur_mwh[t] + problem.spill_penalty_eur_mwh)
+        / problem.slope_eur_mwh_per_gwh[t]
+    )
+    release = np.minimum(
+        np.minimum(released, problem.release_max_gwh[t]),
+        max(no_loss, problem.release_min_gwh[t]),
+    )
     spill = released - release
     cost = quadratic_cost_keur(
         problem.residual_demand_gwh[t] - release,
@@ -250,16 +268,23 @@ def water_values(value_keur: np.ndarray, storage_gwh: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True, eq=False)
 class SdpSolution:
-    """Converged periodic solution.
+    """Periodic solution of the last cycle.
 
     ``value_keur`` and ``water_value_eur_mwh`` are ``(T, K)`` at the start of stages 1-T
-    [kEUR, EUR/MWh]; the stage after T is stage 1. ``next_index``, ``release_gwh`` and
-    ``spill_gwh`` are the optimal decisions ``(T, K, J)``. ``history_eur_mwh`` holds the largest
-    change of any water value between consecutive cycles.
+    [kEUR, EUR/MWh]; the stage after T is stage 1, and ``end_value_keur`` ``(K,)`` is the value
+    after stage T that the last cycle used. ``next_index``, ``release_gwh`` and ``spill_gwh`` are
+    the optimal decisions ``(T, K, J)``. ``history_eur_mwh`` holds the largest change of any
+    water value between consecutive cycles.
+
+    ``value_keur`` is the expected cost-to-go only up to an additive constant: the cycles stop
+    when the water values settle, while the level of V still drifts (it contracts by only
+    ``delta^T`` per cycle). Only differences of V, such as the water values or the comparison
+    of decisions within a stage, are meaningful.
     """
 
     problem: SdpProblem
     value_keur: np.ndarray
+    end_value_keur: np.ndarray
     water_value_eur_mwh: np.ndarray
     next_index: np.ndarray
     release_gwh: np.ndarray
@@ -272,6 +297,12 @@ class SdpSolution:
     def next_storage_gwh(self) -> np.ndarray:
         """Optimal storage at the end of each stage ``(T, K, J)`` [GWh]."""
         return self.problem.storage_gwh[self.next_index]
+
+    def value_after(self, t: int) -> np.ndarray:
+        """Value on the grid after stage ``t`` (0-based) [kEUR, up to a constant]."""
+        if t == self.problem.stages - 1:
+            return self.end_value_keur
+        return self.value_keur[t + 1]
 
 
 def solve(problem: SdpProblem, tol_eur_mwh: float, max_cycles: int) -> SdpSolution:
@@ -301,7 +332,8 @@ def solve(problem: SdpProblem, tol_eur_mwh: float, max_cycles: int) -> SdpSoluti
     cycles = 0
     for _ in range(max_cycles):
         cycles += 1
-        result = backward_pass(problem, end_value)
+        used_end_value = end_value
+        result = backward_pass(problem, used_end_value)
         w = water_values(result.value_keur[:-1], problem.storage_gwh)
         if previous is not None:
             history.append(float(np.abs(w - previous).max()))
@@ -313,6 +345,7 @@ def solve(problem: SdpProblem, tol_eur_mwh: float, max_cycles: int) -> SdpSoluti
     return SdpSolution(
         problem=problem,
         value_keur=result.value_keur[:-1],
+        end_value_keur=used_end_value,
         water_value_eur_mwh=w,
         next_index=result.next_index,
         release_gwh=result.release_gwh,
@@ -354,7 +387,7 @@ def first_order_check(solution: SdpSolution) -> dict[str, np.ndarray]:
     stages = np.arange(p.stages)[:, None, None]
     slope = p.slope_eur_mwh_per_gwh[stages]
     price = p.intercept_eur_mwh[stages] + slope * (p.residual_demand_gwh[stages] - release)
-    value_next = np.roll(solution.value_keur, -1, axis=0)  # the stage after T is stage 1
+    value_next = np.vstack([solution.value_keur[1:], solution.end_value_keur[None, :]])
     flat = np.clip(index, 1, len(s) - 2).reshape(p.stages, -1)
 
     def value_at(offset: int) -> np.ndarray:
@@ -399,10 +432,14 @@ def checks(solution: SdpSolution) -> dict[str, float]:
         ``max_rise_eur_mwh``: water values that grow with storage by more than the resolution,
         and the largest growth; ``interior_decisions``, ``within_bracket_share`` and
         ``median_gap_eur_mwh`` from :func:`first_order_check` (median of
-        ``|p_t - delta w_{t+1}(S')|`` with centred water values).
+        ``|p_t - delta w_{t+1}(S')|`` with centred water values); ``max_rise_week`` and
+        ``max_rise_filling_pct``: where the largest rise is; ``min_water_value_eur_mwh``: with
+        spill as an option, no MWh is worth less than ``-c_sp``.
     """
     resolution = grid_resolution_eur_mwh(solution.problem)
     rise = np.diff(solution.water_value_eur_mwh, axis=1)
+    week, level = np.unravel_index(int(rise.argmax()), rise.shape)
+    s = solution.problem.storage_gwh
     check = first_order_check(solution)
     interior = check["interior"]
     price = check["price"][interior]
@@ -414,6 +451,9 @@ def checks(solution: SdpSolution) -> dict[str, float]:
         "interior_decisions": float(interior.sum()),
         "within_bracket_share": float(within.mean()) if interior.any() else float("nan"),
         "median_gap_eur_mwh": float(np.median(np.abs(price - check["centred"][interior]))),
+        "max_rise_week": float(week + 1),
+        "max_rise_filling_pct": float(100 * s[level + 1] / s[-1]),
+        "min_water_value_eur_mwh": float(solution.water_value_eur_mwh.min()),
     }
 
 
@@ -477,6 +517,12 @@ def compare_solutions(
             },
         }
     return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def _span(years: Sequence[int]) -> str:
+    """``2021-2023`` for a run of years."""
+    ordered = sorted(years)
+    return f"{ordered[0]}-{ordered[-1]}" if ordered else "no years"
 
 
 def capacity_gwh(cfg: AppConfig, weekly: pd.DataFrame) -> float:
@@ -558,6 +604,29 @@ def base_de_price_profile(
     if cfg.sdp.de_price_shape == "without_crisis":
         years = [year for year in years if year not in cfg.price_model.crisis_years]
     return de_price_profile(table, years=years, level_eur_mwh=level)
+
+
+def de_price_levels(cfg: AppConfig, table: pd.DataFrame) -> dict[str, float]:
+    """Mean German price of all years and of the years outside the crisis [EUR/MWh].
+
+    Parameters
+    ----------
+    cfg : AppConfig
+        Configuration (``price_model.crisis_years``).
+    table : pandas.DataFrame
+        Output of :func:`watervalues.price.price_table`.
+
+    Returns
+    -------
+    dict of str to float
+        ``all_years`` and ``without_crisis``: means of the weekly profiles over 52 stages.
+    """
+    years = sorted(int(year) for year in table["iso_year"].unique())
+    calm = [year for year in years if year not in cfg.price_model.crisis_years]
+    return {
+        "all_years": float(de_price_profile(table).mean()),
+        "without_crisis": float(de_price_profile(table, years=calm).mean()),
+    }
 
 
 def build_problem(
@@ -642,8 +711,9 @@ def water_value_table(solution: SdpSolution) -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        ``iso_week``, ``storage_gwh`` [GWh], ``filling_pct`` [% of ``S_max``], ``value_keur``
-        [kEUR] and ``water_value_eur_mwh`` [EUR/MWh].
+        ``iso_week``, ``storage_gwh`` [GWh], ``filling_pct`` [% of ``S_max``] and
+        ``water_value_eur_mwh`` [EUR/MWh]. The level of V is left out: it is not converged
+        (see :class:`SdpSolution`).
     """
     s = solution.problem.storage_gwh
     weeks, points = solution.water_value_eur_mwh.shape
@@ -652,7 +722,6 @@ def water_value_table(solution: SdpSolution) -> pd.DataFrame:
             "iso_week": np.repeat(np.arange(1, weeks + 1), points),
             "storage_gwh": np.tile(s, weeks),
             "filling_pct": np.tile(100 * s / s[-1], weeks),
-            "value_keur": solution.value_keur.ravel(),
             "water_value_eur_mwh": solution.water_value_eur_mwh.ravel(),
         }
     )
@@ -693,6 +762,11 @@ def sdp_report(
     )
     reference = cfg.data.sanity.storage_capacity_ref_gwh
     years = cfg.period.first_iso_year, cfg.period.last_iso_year
+    table = price_table(weekly, cfg.price_model.seasons)
+    levels = de_price_levels(cfg, table)
+    full = p.intercept_eur_mwh + p.slope_eur_mwh_per_gwh * (
+        p.residual_demand_gwh - p.release_max_gwh
+    )
     lines = [
         "Water value SDP: V_t(S) = sum_j pi_j min [C_t(D_t - R) + c_sp Sp + delta V_t+1(S')]; "
         "w = -dV/dS [EUR/MWh]",
@@ -707,12 +781,17 @@ def sdp_report(
         f"(percentile {cfg.reservoir.rmin_percentile:g}, basis {cfg.reservoir.rmin_basis})",
         f"  residual demand D_t: {p.residual_demand_gwh.min():,.0f} to "
         f"{p.residual_demand_gwh.max():,.0f} GWh per stage",
-        f"  German price profile: shape {cfg.sdp.de_price_shape}, mean "
-        f"{base_de_price_profile(cfg, price_table(weekly, cfg.price_model.seasons)).mean():.1f} "
-        "EUR/MWh",
+        f"  German price profile (configured): shape {cfg.sdp.de_price_shape}, mean "
+        f"{base_de_price_profile(cfg, table).mean():.1f} EUR/MWh; the mean of all years, "
+        f"{levels['all_years']:.1f}, includes {_span(cfg.price_model.crisis_years)}; "
+        f"the other years average {levels['without_crisis']:.1f}",
         f"  price curve: a_t {p.intercept_eur_mwh.min():.1f} to {p.intercept_eur_mwh.max():.1f} "
         f"EUR/MWh, b_t {p.slope_eur_mwh_per_gwh.min():.4f} to "
         f"{p.slope_eur_mwh_per_gwh.max():.4f} EUR/MWh per GWh",
+        f"  price at full release p_t(D_t - R_max): {full.min():.1f} to {full.max():.1f} EUR/MWh, "
+        f"below zero in {int((full < 0).sum())} of {p.stages} weeks (the linear curve beyond "
+        f"the largest observed export, {table['net_import_stage_gwh'].min():,.0f} GWh); there "
+        "the model spills rather than sells below -c_sp",
         f"\nConvergence: {solution.cycles} cycles, "
         f"{'converged' if solution.converged else 'NOT converged'} (tolerance "
         f"{cfg.sdp.tol_eur_mwh:g} EUR/MWh); solved in {seconds:.1f} s",
@@ -728,13 +807,17 @@ def sdp_report(
         index=pd.Index(cfg.sdp.curve_weeks, name="iso_week"),
     )
     found = checks(solution)
+    floor_ok = found["min_water_value_eur_mwh"] >= -p.spill_penalty_eur_mwh - _VALUE_TOL
     lines += [
         "\nChecks: water values non-increasing in storage within the grid resolution "
         f"({found['resolution_eur_mwh']:.2f} EUR/MWh): "
         f"{'yes' if found['rising_cells'] == 0 else 'NO'} ({found['rising_cells']:.0f} cells "
-        f"above, largest rise {found['max_rise_eur_mwh']:.2f} EUR/MWh)",
+        f"above; largest rise {found['max_rise_eur_mwh']:.2f} EUR/MWh, in week "
+        f"{found['max_rise_week']:.0f} at {found['max_rise_filling_pct']:.1f}% filling)",
+        f"  water values >= -c_sp (spill is always possible): {'yes' if floor_ok else 'NO'} "
+        f"(lowest {found['min_water_value_eur_mwh']:.3f} EUR/MWh)",
         f"  optimality p_t = delta w_t+1(S') at {found['interior_decisions']:.0f} interior "
-        f"decisions: {found['within_bracket_share']:.1%} inside the grid bracket; median "
+        f"decisions: {found['within_bracket_share']:.2%} inside the grid bracket; median "
         f"|p_t - delta w_t+1| {found['median_gap_eur_mwh']:.2f} EUR/MWh",
     ]
     w = solution.water_value_eur_mwh
@@ -756,6 +839,7 @@ def save_solution(solution: SdpSolution, path: Path) -> None:
         path,
         **arrays,
         value_keur=solution.value_keur,
+        end_value_keur=solution.end_value_keur,
         water_value_eur_mwh=solution.water_value_eur_mwh,
         next_index=solution.next_index,
         release_gwh=solution.release_gwh,
@@ -782,6 +866,7 @@ def load_solution(path: Path) -> SdpSolution:
         return SdpSolution(
             problem=problem,
             value_keur=data["value_keur"],
+            end_value_keur=data["end_value_keur"],
             water_value_eur_mwh=data["water_value_eur_mwh"],
             next_index=data["next_index"],
             release_gwh=data["release_gwh"],

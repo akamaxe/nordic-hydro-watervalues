@@ -36,7 +36,7 @@ price_model:                  # p = alpha + season + gamma p_DE + slope N, N per
   selection_tolerance_eur_mwh: 0.5
   weekly_csv: outputs/price_weekly.csv       # regression table, fitted and LOYO prices per week
   variants_csv: outputs/price_variants.csv   # the variant comparison
-  curve_json: outputs/price_curve.json       # the base curve read by the SDP
+  curve_json: outputs/price_curve.json       # the base curve (the SDP refits the same one)
   report: outputs/price_report.txt
 
 sdp:                          # weekly SDP over the 52 stages of a periodic year (guide 5.3-5.4)
