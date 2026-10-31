@@ -44,6 +44,7 @@ class ReservoirConfig(_Section):
     hydro_capacity_mw: float = Field(gt=0)
     availability: float = Field(gt=0, le=1)
     rmin_percentile: float = Field(ge=0, le=100)
+    rmin_basis: Literal["production", "inflow_capped"]
 
 
 class PriceModelConfig(_Section):
@@ -88,6 +89,14 @@ class SdpConfig(_Section):
     spill_penalty_eur_mwh: float = Field(ge=0)
     tol_eur_mwh: float = Field(gt=0)
     max_cycles: int = Field(ge=1)
+    de_price_shape: Literal["all_years", "without_crisis"]
+    de_price_level_eur_mwh: float | None = Field(default=None, gt=0)
+    grid_sensitivity_points: tuple[int, ...]
+    curve_weeks: tuple[int, ...]
+    report_fillings_pct: tuple[float, ...]
+    values_npz: Path
+    water_values_csv: Path
+    report: Path
 
 
 class SimulationConfig(_Section):

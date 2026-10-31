@@ -287,6 +287,30 @@ def _ols(
     return results, used
 
 
+def quadratic_cost_keur(
+    net_import_gwh: ArrayLike, intercept_eur_mwh: ArrayLike, slope_eur_mwh_per_gwh: ArrayLike
+) -> np.ndarray:
+    """Cost of covering a net import on a linear price curve: ``C(N) = a N + b / 2 N^2``.
+
+    Parameters
+    ----------
+    net_import_gwh : array_like
+        Net import ``N`` [GWh per 168-hour stage].
+    intercept_eur_mwh : array_like
+        Price at zero net import ``a`` [EUR/MWh], broadcast against ``net_import_gwh``.
+    slope_eur_mwh_per_gwh : array_like
+        Price slope ``b`` [EUR/MWh per GWh], broadcast against ``net_import_gwh``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Cost [kEUR]: GWh x EUR/MWh = kEUR. Negative for exports when ``a > 0`` (revenue).
+    """
+    net_import = np.asarray(net_import_gwh, dtype=float)
+    energy_cost = intercept_eur_mwh * net_import + slope_eur_mwh_per_gwh / 2 * net_import**2
+    return energy_cost * MWH_PER_GWH / EUR_PER_KEUR  # GWh EUR/MWh -> kEUR
+
+
 @dataclass(frozen=True)
 class StageCurve:
     """Weekly intercept and slope of the price curve for one German price profile.
@@ -371,11 +395,9 @@ class StageCurve:
             Cost [kEUR]: GWh x EUR/MWh = kEUR.
         """
         index = _stage_index(week)
-        net_import = np.asarray(net_import_gwh, dtype=float)
-        intercept = self.intercept_eur_mwh[index]
-        slope = self.slope_eur_mwh_per_gwh[index]
-        energy_cost = intercept * net_import + slope / 2 * net_import**2  # [GWh EUR/MWh]
-        return energy_cost * MWH_PER_GWH / EUR_PER_KEUR
+        return quadratic_cost_keur(
+            net_import_gwh, self.intercept_eur_mwh[index], self.slope_eur_mwh_per_gwh[index]
+        )
 
 
 @dataclass(frozen=True)

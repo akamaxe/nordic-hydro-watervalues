@@ -197,6 +197,33 @@ def price(config: ConfigOption = None) -> None:
 
 
 @app.command()
+def solve(config: ConfigOption = None) -> None:
+    """Solve the water value SDP from weekly_se.csv (into outputs/)."""
+    from watervalues.config import PROJECT_ROOT
+    from watervalues.data.build import load_weekly
+    from watervalues.inflow import InflowError
+    from watervalues.price import PriceError
+    from watervalues.sdp import SdpError, build_problem, sdp_report, timed_solve, write_outputs
+
+    cfg = load_config(config)
+    weekly = load_weekly(PROJECT_ROOT / cfg.data.weekly_csv)
+    try:
+        solution, seconds = timed_solve(cfg, build_problem(cfg, weekly))
+    except (InflowError, PriceError, SdpError) as exc:
+        typer.echo(f"SDP stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    report = sdp_report(cfg, weekly, solution, seconds)
+    for line in report:
+        typer.echo(line)
+    write_outputs(cfg, solution, report)
+    paths = cfg.sdp
+    typer.echo(f"\nWrote {paths.values_npz}, {paths.water_values_csv} and {paths.report}")
+    if not solution.converged:
+        typer.echo("The water values did not converge: raise sdp.max_cycles or check inputs.")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def notebooks() -> None:
     """Execute every notebook in notebooks/ in order, in place, so outputs are up to date."""
     import nbformat

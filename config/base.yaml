@@ -7,7 +7,15 @@ reservoir:
   capacity_gwh: null          # null -> use the maximum observed historical storage
   hydro_capacity_mw: 16300    # to be checked against an official source
   availability: 0.85
+  # Minimum release R_min_t: this percentile, over the years, of each ISO week's
+  #   production     - hydro production (the guide's definition), or
+  #   inflow_capped  - min(production, inflow): forced production (run-of-river, minimum flows,
+  #                    the flood) cannot exceed what flows in during the week.
+  # Production-based R_min treats winter output, which follows demand, as a physical minimum:
+  # it forces water out at low storage and makes winter water values rise with storage
+  # (notebook 04 compares both).
   rmin_percentile: 5
+  rmin_basis: inflow_capped
 
 price_model:                  # p = alpha + season + gamma p_DE + slope N, N per 168-h stage (guide 5.2)
   # Base model, chosen in notebook 03 by the selection rule below (`watervalues price` reports
@@ -31,12 +39,24 @@ price_model:                  # p = alpha + season + gamma p_DE + slope N, N per
   curve_json: outputs/price_curve.json       # the base curve read by the SDP
   report: outputs/price_report.txt
 
-sdp:
+sdp:                          # weekly SDP over the 52 stages of a periodic year (guide 5.3-5.4)
   n_storage_points: 201
   discount_rate_annual: 0.05
-  spill_penalty_eur_mwh: 0.01
-  tol_eur_mwh: 0.05
+  spill_penalty_eur_mwh: 0.01 # only breaks ties between spilling and releasing
+  tol_eur_mwh: 0.05           # stop when no water value moves more than this between cycles
   max_cycles: 50
+  # Base-case German price per ISO week: the mean seasonal shape of the years outside
+  # price_model.crisis_years (without_crisis) or of all years (all_years), scaled to the mean of
+  # all years (level null) or to this annual mean [EUR/MWh] (the continental price scenarios).
+  # With all years the 2022 gas-price spikes make the summer the dearest quarter.
+  de_price_shape: without_crisis
+  de_price_level_eur_mwh: null
+  grid_sensitivity_points: [101, 201, 401]
+  curve_weeks: [2, 16, 30, 44]               # ISO weeks shown as water value curves
+  report_fillings_pct: [10, 25, 50, 75, 90]  # storage levels tabulated in the report [%]
+  values_npz: outputs/water_values.npz       # V, w and the policy, with the problem inputs
+  water_values_csv: outputs/water_values.csv # w per ISO week and storage level
+  report: outputs/sdp_report.txt
 
 simulation:
   decision_step_gwh: 10
