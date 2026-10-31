@@ -58,11 +58,19 @@ sdp:                          # weekly SDP over the 52 stages of a periodic year
   water_values_csv: outputs/water_values.csv # w per ISO week and storage level
   report: outputs/sdp_report.txt
 
-simulation:
-  decision_step_gwh: 10
+simulation:                   # forward simulation, backtest and scenarios (guide 5.5-5.6)
+  decision_step_gwh: 10       # release grid of the weekly decision [GWh]
+  backtest_csv: outputs/backtest_weekly.csv   # simulated and observed, every week and year
+  metrics_csv: outputs/backtest_metrics.csv   # accuracy per year and over all years
+  de_price_csv: outputs/scenario_de_price.csv # water values per German price level
+  dry_wet_csv: outputs/scenario_dry_wet.csv   # the driest and wettest year from one start
+  report: outputs/simulate_report.txt
 
 scenarios:
   de_price_levels_eur_mwh: [50, 80, 120]
+
+figures:
+  dir: reports/figures         # PNGs for the README, written by `watervalues figures`
 
 inflow:                       # I = storage_end - storage + hydro (spill not observed: assumed 0)
   # Negative weekly inflow down to -negative_noise_gwh is storage-reporting noise: it is clipped
