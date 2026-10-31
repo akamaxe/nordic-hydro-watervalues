@@ -1,6 +1,7 @@
 """Tests for the water value SDP (synthetic problems and the committed dataset, offline)."""
 
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -320,6 +321,16 @@ def test_compare_solutions_tabulates_checks_and_points(base) -> None:
         "week 38 at 90%",
     ]
     assert table.loc["base", "week 10 at 10%"] == pytest.approx(water_value_at(solution, 10, 10))
+
+
+def test_checks_without_interior_decisions_do_not_warn() -> None:
+    # On a three-point grid no decision has room on both sides: the checks say so quietly.
+    solution = solve(toy_problem(points=3), SDP.tol_eur_mwh, SDP.max_cycles)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        found = checks(solution)
+    assert found["interior_decisions"] == 0
+    assert np.isnan(found["median_gap_eur_mwh"])
 
 
 def test_problem_rejects_inconsistent_inputs() -> None:

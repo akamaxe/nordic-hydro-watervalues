@@ -250,11 +250,14 @@ def simulate(config: ConfigOption = None) -> None:
 def figures(config: ConfigOption = None) -> None:
     """Draw the README figures from outputs/ into reports/figures/."""
     from watervalues.figures import FiguresError, make_figures
+    from watervalues.inflow import InflowError
+    from watervalues.price import PriceError
+    from watervalues.sdp import SdpError
 
     cfg = load_config(config)
     try:
         written = make_figures(cfg)
-    except FiguresError as exc:
+    except (FiguresError, InflowError, PriceError, SdpError) as exc:
         typer.echo(f"Figures stopped: {exc}", err=True)
         raise typer.Exit(code=1) from None
     for path in written:

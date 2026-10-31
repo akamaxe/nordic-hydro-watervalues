@@ -667,7 +667,7 @@ def water_value_curves(
         ax.plot(filling, water_value_eur_mwh[week - 1], color=colour, label=f"week {week}")
     ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
     ax.set_xlim(0, 100)
-    ax.set_xlabel("Storage at start of week [% of capacity]")
+    ax.set_xlabel("Storage at start of week [% of largest observed storage]")
     ax.set_ylabel("Water value [EUR/MWh]")
     ax.legend(loc="upper right")
     return ax
@@ -727,7 +727,7 @@ def grid_comparison(
     ):
         ax.plot(filling, value, color=colour, linestyle=styles[i % len(styles)], label=label)
     ax.set_xlim(0, 100)
-    ax.set_xlabel("Storage at start of week [% of capacity]")
+    ax.set_xlabel("Storage at start of week [% of largest observed storage]")
     ax.set_ylabel("Water value [EUR/MWh]")
     ax.legend(loc="upper right")
     return ax
@@ -776,7 +776,7 @@ def backtest_storage(backtest: pd.DataFrame, capacity_gwh: float) -> Figure:
         ax.set_visible(False)
     flat[0].legend(loc="lower left", fontsize=8)
     fig.supxlabel("ISO week", color=INK_SECONDARY)
-    fig.supylabel("Storage at end of week [% of capacity]", color=INK_SECONDARY)
+    fig.supylabel("Storage at end of week [% of largest observed storage]", color=INK_SECONDARY)
     return fig
 
 
@@ -872,7 +872,7 @@ def dry_and_wet(traces: pd.DataFrame, capacity_gwh: float) -> Figure:
         )
         bottom.plot(group["iso_week"], group["price_eur_mwh"], color=colour, label=label)
     top.set_ylim(0, 100)
-    top.set_ylabel("Storage at end of week [% of capacity]")
+    top.set_ylabel("Storage at end of week [% of largest observed storage]")
     top.legend(loc="lower right")
     bottom.set_xlim(1, 52)
     bottom.set_xlabel("ISO week")

@@ -107,6 +107,7 @@ class SimulationConfig(_Section):
     metrics_csv: Path
     de_price_csv: Path
     dry_wet_csv: Path
+    checks_csv: Path
     report: Path
 
 
