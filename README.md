@@ -25,6 +25,8 @@ uv run pytest
 3. [Price curve](notebooks/03_price_model.ipynb): the reduced-form curve linking the Swedish
    price to net import and the German price, eight variants compared out of sample, and the
    weekly cost function of the water value model.
+4. [Water values](notebooks/04_water_values.ipynb): the stochastic dynamic programme, the
+   water value of every week and storage level, and checks against theory and the grid.
 
 ## Data
 
