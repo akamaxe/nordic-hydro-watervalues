@@ -8,7 +8,7 @@ reservoir:
   hydro_capacity_mw: 16300    # to be checked against an official source
   availability: 0.85
   # Minimum release R_min_t: this percentile, over the years, of each ISO week's
-  #   production     - hydro production (the guide's definition), or
+  #   production     - hydro production alone, or
   #   inflow_capped  - min(production, inflow): forced production (run-of-river, minimum flows,
   #                    the flood) cannot exceed what flows in during the week.
   # Production-based R_min treats winter output, which follows demand, as a physical minimum:
@@ -17,10 +17,10 @@ reservoir:
   rmin_percentile: 5
   rmin_basis: inflow_capped
 
-price_model:                  # p = alpha + season + gamma p_DE + slope N, N per 168-h stage (guide 5.2)
+price_model:                  # p = alpha + season + gamma p_DE + slope N (methodology, section 3)
   # Base model, chosen in notebook 03 by the selection rule below (`watervalues price` reports
   # whether this choice agrees with the rule; it never changes it):
-  slope_form: proportional    # constant: slope = beta (guide) | proportional: slope = kappa p_DE
+  slope_form: proportional    # constant: slope = beta | proportional: slope = kappa p_DE
   seasonal_dummies: true
   exclude_years: []           # [] (all years) or exactly crisis_years
   # Variants compared with the base: both slope forms, with and without seasonal dummies, with
@@ -39,7 +39,7 @@ price_model:                  # p = alpha + season + gamma p_DE + slope N, N per
   curve_json: outputs/price_curve.json       # the base curve (the SDP refits the same one)
   report: outputs/price_report.txt
 
-sdp:                          # weekly SDP over the 52 stages of a periodic year (guide 5.3-5.4)
+sdp:                          # weekly SDP over the 52 stages of a periodic year (methodology, 4)
   n_storage_points: 201
   discount_rate_annual: 0.05
   spill_penalty_eur_mwh: 0.01 # only breaks ties between spilling and releasing
@@ -58,7 +58,7 @@ sdp:                          # weekly SDP over the 52 stages of a periodic year
   water_values_csv: outputs/water_values.csv # w per ISO week and storage level
   report: outputs/sdp_report.txt
 
-simulation:                   # forward simulation, backtest and scenarios (guide 5.5-5.6)
+simulation:                   # forward simulation, backtest and scenarios (methodology, 5)
   decision_step_gwh: 10       # release grid of the weekly decision [GWh]
   backtest_csv: outputs/backtest_weekly.csv   # simulated and observed, every week and year
   metrics_csv: outputs/backtest_metrics.csv   # accuracy per year and over all years
@@ -142,7 +142,7 @@ data:
       - {area: SE2, iso_year: 2026, iso_week: 43, stored_gwh: 12976}
       - {area: SE3, iso_year: 2026, iso_week: 43, stored_gwh: 1872}
       - {area: SE4, iso_year: 2026, iso_week: 43, stored_gwh: 44}
-  sanity:                     # guide section 4 orders of magnitude, widened; warnings only
+  sanity:                     # expected orders of magnitude, widened; warnings only
     load_twh_per_year: [120, 150]
     hydro_twh_per_year: [55, 80]
     storage_capacity_ref_gwh: 33700   # Energiföretagen: 100 % = 33.7 TWh

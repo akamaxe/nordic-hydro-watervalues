@@ -123,7 +123,7 @@ def base():
     return problem, solution, time.perf_counter() - start
 
 
-# --- Definition of Done (guide section 8, M4) ---------------------------------------------------
+# --- Definition of Done: the solver's properties -------------------------------------------------
 
 
 def test_one_scenario_matches_deterministic_dp() -> None:
@@ -174,7 +174,7 @@ def test_water_values_do_not_increase_with_storage(base) -> None:
 
 
 def test_production_based_minimum_release_breaks_monotonicity() -> None:
-    # The finding behind reservoir.rmin_basis: with the guide's production-based R_min, output
+    # The finding behind reservoir.rmin_basis: with a production-based R_min, output
     # that follows demand (winter) becomes a hard minimum; at low storage water is forced out at
     # this week's price and the water value rises with storage. Without R_min it does not.
     cfg = CFG.model_copy(
@@ -378,7 +378,7 @@ def test_inputs_from_the_committed_dataset(base) -> None:
 def test_water_values_are_high_in_late_winter_when_low_and_low_in_late_summer_when_full(
     base,
 ) -> None:
-    # The guide's physical check, as an orientation (the owner inspects the figures).
+    # The expected physical pattern, as an orientation (the figures show the whole picture).
     _, solution, _ = base
     late_winter_low = water_value_at(solution, 10, 10)
     late_summer_full = water_value_at(solution, 38, 90)

@@ -6,7 +6,7 @@
 
 Water values for the aggregated Swedish hydro reservoir: a minimal, open EMPS-style stochastic dynamic programming model built on ENTSO-E data.
 
-The water value is what one more MWh in the reservoir is worth: the future cost it saves by not being used today. In a hydro-dominated system like the Nordic one it sets the price. This repository rebuilds the core of an EMPS-type model at the scale of one aggregated Swedish reservoir. It reconstructs weekly inflows from public data, calibrates a price curve against German prices, solves the water values by stochastic dynamic programming and checks the result against how the reservoir was actually operated in 2015–2025.
+The water value is what one more MWh in the reservoir is worth: the future cost it saves by not being used today. In a hydro-dominated system like the Nordic one it sets the price. This repository rebuilds the core of an EMPS-type model at the scale of one aggregated Swedish reservoir. It reconstructs weekly inflows from public data, calibrates a price curve against German prices, solves the water values by stochastic dynamic programming and checks the result against how the reservoir was actually operated in 2015-2025.
 
 ![Water value of the Swedish reservoir by week and storage level, with the observed storage of 2015-2025](reports/figures/water_values.png)
 
@@ -32,11 +32,11 @@ flowchart LR
     E --> F[Simulation<br/>backtest, scenarios]
 ```
 
-1. **Data.** Weekly generation, load, prices and reservoir filling for Sweden come from the ENTSO-E Transparency Platform. The reservoir timestamp convention is verified against Energiföretagen's statistics.
-2. **Inflow.** Weekly energy inflow follows from the reservoir's energy balance. Each year 2015–2025 becomes one inflow scenario.
-3. **Price curve.** The Swedish weekly price is regressed on net import and the German price, with a slope proportional to the German price level. It is chosen among eight variants by out-of-sample error.
-4. **Water values.** A weekly stochastic dynamic programme over storage and inflow scenarios, solved for a periodic year.
-5. **Simulation.** Each historical year is replayed with a price curve and inflow scenarios that have not seen it. Two scenarios are run: the continental price level, and the driest against the wettest year.
+1. Weekly generation, load, prices and reservoir filling for Sweden come from the ENTSO-E Transparency Platform. The timestamp convention of the reservoir series is verified against Energiföretagen's statistics.
+2. Weekly energy inflow follows from the reservoir's energy balance, and each year of 2015-2025 becomes one inflow scenario.
+3. The Swedish weekly price is regressed on net import and the German price, with a slope proportional to the German price level. This form was chosen among eight variants by out-of-sample error.
+4. A weekly stochastic dynamic programme over storage and inflow scenarios, solved for a periodic year, gives the water values.
+5. Each historical year is replayed with a price curve and inflow scenarios that have not seen it. Two scenarios vary the continental price level and set the driest year against the wettest.
 
 ## Results
 
@@ -57,10 +57,10 @@ flowchart LR
 
 ## Validation
 
-- **The reservoir data.** The timestamp convention of the reservoir series is checked against an Energiföretagen weekly report and against its weekly statistics for 2019–2025.
-- **The solver.** It reproduces a brute-force dynamic programme on small problems, including forced spill and negative prices. In the base case and the price scenarios, its water values are non-increasing in storage within the price resolution of the grid. In most backtest years they rise slightly at a nearly empty reservoir, the kink of the minimum-release rule, which no simulated decision reaches. No water value is below minus the spill penalty. The optimality condition (price = discounted water value) holds at every interior decision, within half a storage step.
-- **The price model.** It is chosen by leave-one-year-out error, and each backtest year uses a price curve and inflow scenarios that exclude it.
-- **The tests.** An offline test suite runs in CI on every push to main and every pull request, including exact recovery on synthetic data and the mass balance of every simulated week.
+- The timestamp convention of the reservoir series is checked against an Energiföretagen weekly report and against its weekly statistics for 2019-2025.
+- On small problems the solver reproduces a brute-force dynamic programme, including forced spill and negative prices. In the base case and the price scenarios, its water values are non-increasing in storage within the price resolution of the grid. In most backtest years they rise slightly at a nearly empty reservoir, the kink of the minimum-release rule, which no simulated decision reaches. No water value is below minus the spill penalty, and the optimality condition (price = discounted water value) holds at every interior decision within half a storage step.
+- The price model is chosen by leave-one-year-out error, and each backtest year uses a price curve and inflow scenarios that exclude it.
+- An offline test suite runs in CI on every push to main and every pull request. Among other things it checks exact parameter recovery on synthetic data and the mass balance of every simulated week.
 
 ## Reproduce
 
@@ -87,12 +87,12 @@ The full formulation is in [reports/methodology.md](reports/methodology.md). The
 
 ## Limitations and next steps
 
-- **One reservoir.** Sweden is modelled as a single aggregated reservoir and price area, without transmission limits between the hydro-rich north and the load in the south. A two-area version is the natural next step.
-- **Independent inflows.** Inflows are independent between weeks, with eleven historical years. A PAR(1) inflow model would capture dry spells.
-- **The price curve.** It is linear and reduced-form, and hydro's response to price makes net import endogenous.
-- **Risk neutrality.** The model minimises expected cost. Together with independent inflows, this is a plausible reason why it releases more water than producers did.
-- **Fixed demand and German price.** Residual demand and the German price are fixed inside the water value model, and the backtest knows both in advance.
-- **Unobserved spill.** Spill is not observed, so wet-week inflows are underestimated.
+- Sweden is modelled as a single aggregated reservoir and price area, without transmission limits between the hydro-rich north and the load in the south. A two-area version is the natural next step.
+- Inflows are independent between weeks and come from only eleven historical years. A PAR(1) inflow model would capture dry spells.
+- The price curve is linear and reduced-form, and hydro's response to price makes net import endogenous.
+- The model is risk neutral: it minimises expected cost. Together with the independent inflows, this is a plausible reason why it releases more water than producers did.
+- Residual demand and the German price are fixed inside the water value model, and the backtest knows both in advance.
+- Spill is not observed, so inflows in wet weeks are underestimated.
 
 ## How this was built
 

@@ -1,7 +1,6 @@
 """Reduced-form price curve of the Swedish market and the cost of covering net import.
 
-Every variant of the curve (guide section 5.2, extended with the owner-approved proportional
-slope) is
+Every variant of the curve (``reports/methodology.md``, section 3) is
 
     p_w = alpha + s(w) + gamma p_DE,w + b_w N_w + e_w,
 
@@ -12,7 +11,7 @@ with
 - ``p_w`` the load-weighted Swedish price and ``p_DE,w`` the German price [EUR/MWh];
 - ``s(w)`` the intercept of the season of ISO week ``w`` [EUR/MWh] (optional dummies; the first
   season is the reference);
-- ``b_w`` the slope: constant, ``b = beta`` [EUR/MWh per GWh] (the guide's form), or
+- ``b_w`` the slope: constant, ``b = beta`` [EUR/MWh per GWh] (the simplest form), or
   proportional to the German price, ``b_w = kappa p_DE,w`` with ``kappa`` [1/GWh].
 
 For a 52-stage German price profile every variant reduces to a weekly intercept and slope,
@@ -577,7 +576,7 @@ class PriceCurve:
 
 
 def _check_slope(curve: PriceCurve) -> None:
-    """Stop on a slope coefficient <= 0 (the guide's rule): a sign, unit or alignment error."""
+    """Stop on a slope coefficient <= 0 (the model's stop rule): a sign, unit or alignment error."""
     if not curve.slope_coefficient > 0:
         raise PriceError(
             f"{curve.spec.label}: slope {curve.spec.slope_term} = {curve.slope_coefficient:.6g} "

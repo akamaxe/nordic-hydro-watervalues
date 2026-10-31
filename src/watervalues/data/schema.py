@@ -41,8 +41,8 @@ def psr_code(name: str) -> str:
         raise KeyError(f"unknown production type name: {name!r}") from None
 
 
-# Column contract of data/processed/weekly_se.csv (guide section 4, plus `hours` and
-# `storage_end_gwh`; see data/README.md).
+# Column contract of data/processed/weekly_se.csv (see the column dictionary in
+# data/README.md).
 WEEKLY_COLUMNS: Final[tuple[str, ...]] = (
     "week_start",
     "iso_year",

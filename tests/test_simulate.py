@@ -54,7 +54,7 @@ def run(solution, inflow=None, start=None, step=STEP, demand=None) -> pd.DataFra
     )
 
 
-# --- Definition of Done (guide section 8, M5) ---------------------------------------------------
+# --- Definition of Done: an exact mass balance ---------------------------------------------------
 
 
 def test_mass_balance_closes_exactly_every_week(base) -> None:

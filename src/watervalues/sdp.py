@@ -2,7 +2,7 @@
 
 The reservoir has one state, the stored energy ``S`` [GWh] at the start of a weekly stage. For
 stage ``t`` and inflow scenario ``j`` (probability ``pi_j``), the expected cost-to-go is
-(guide section 5.3)
+(``reports/methodology.md``, section 4)
 
     V_t(S) = sum_j pi_j min_{R, Sp} [ C_t(D_t - R) + c_sp Sp + delta V_{t+1}(S') ],
 
@@ -18,7 +18,7 @@ The water value is ``w_t(S) = -dV_t/dS`` [kEUR/GWh = EUR/MWh], by centred differ
 grid. At an interior optimum the week's price equals the discounted water value of next week,
 ``p_t(D_t - R*) = delta w_{t+1}(S')``.
 
-Algorithm (guide section 5.4): ``K`` uniform storage points; backward over the stages with the
+Algorithm: ``K`` uniform storage points; backward over the stages with the
 candidates ``S'`` on the same grid, vectorised over ``(S, scenario, S')`` (loop over stages only);
 the year is repeated with the value of stage 1 as the end value until no water value moves more
 than the tolerance between cycles. With ``delta < 1`` the cycle is a contraction and converges.
@@ -563,7 +563,7 @@ def release_min(
     percentile : float
         Percentile over the years [0-100].
     basis : {"production", "inflow_capped"}
-        ``production``: the percentile of production (the guide's definition).
+        ``production``: the percentile of production alone.
         ``inflow_capped``: the percentile of ``min(production, inflow)``, since forced
         production cannot exceed what flows in during the week.
 

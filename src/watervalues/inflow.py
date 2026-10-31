@@ -1,6 +1,6 @@
 """Weekly energy inflow of the aggregated reservoir and the inflow scenarios of the SDP.
 
-The inflow follows from the energy balance of the reservoir (guide section 5.1),
+The inflow follows from the energy balance of the reservoir (``reports/methodology.md``, section 2),
 
     I_w = (S_{w+1} - S_w) + P_w + Sp_w,
 

@@ -1,7 +1,7 @@
 """Forward simulation of the reservoir with the water values: historical backtest and scenarios.
 
 Week by week, from the storage at the start of the week, the release ``R`` is chosen on a fine
-grid (``simulation.decision_step_gwh``) to minimise (guide section 5.5)
+grid (``simulation.decision_step_gwh``) to minimise (``reports/methodology.md``, section 5)
 
     C_t(D_t - R) + c_sp Sp + delta V_{t+1}(S'),   S' = S + I_t - R - Sp,
 
@@ -21,7 +21,7 @@ without an observed residual demand use the climatological one; a missing German
 the base seasonal shape at the year's own level; both are flagged and left out of the price
 metrics.
 
-**Scenarios** (guide section 5.6): the German price profile scaled to several annual means,
+**Scenarios**: the German price profile scaled to several annual means,
 and the driest against the wettest year of inflow from the same initial storage.
 """
 
