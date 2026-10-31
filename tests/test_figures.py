@@ -5,7 +5,9 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from watervalues import figures as figures_module
 from watervalues import findings as findings_module
+from watervalues import price as price_module
 from watervalues.cli import app
 from watervalues.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from watervalues.data.build import load_weekly
@@ -47,6 +49,18 @@ def test_figures_need_the_outputs(tmp_path) -> None:
 
 def test_figures_and_findings_are_drawn_from_the_outputs(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
+    # `price` and `figures` both fit every price variant on the same inputs: fit them once.
+    real_build_price = price_module.build_price
+    fitted = {}
+
+    def build_price_once(cfg, weekly):
+        if not fitted:
+            fitted.update(cfg=cfg, result=real_build_price(cfg, weekly))
+        assert cfg == fitted["cfg"]
+        return fitted["result"]
+
+    monkeypatch.setattr(price_module, "build_price", build_price_once)
+    monkeypatch.setattr(figures_module, "build_price", build_price_once)
     runner = CliRunner()
     for command in ("price", "solve"):
         result = runner.invoke(app, [command, "--config", config])

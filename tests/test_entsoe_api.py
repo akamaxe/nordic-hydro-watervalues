@@ -164,7 +164,10 @@ def cfg(tmp_path):
     base = load_config()
     period = base.period.model_copy(update={"first_iso_year": 2015, "last_iso_year": 2016})
     reservoir = base.data.reservoir.model_copy(update={"references": ()})
-    data = base.data.model_copy(update={"raw_dir": tmp_path, "reservoir": reservoir})
+    # One price zone besides the country is enough to test the fetch logic, and faster.
+    data = base.data.model_copy(
+        update={"raw_dir": tmp_path, "reservoir": reservoir, "price_zones": ("SE1",)}
+    )
     return base.model_copy(update={"period": period, "data": data})
 
 
