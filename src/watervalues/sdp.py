@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 from watervalues.config import PROJECT_ROOT, AppConfig
-from watervalues.inflow import build_inflow
+from watervalues.inflow import InflowResult, build_inflow
 from watervalues.price import (
     PriceCurve,
     base_spec,
@@ -433,12 +433,15 @@ def checks(solution: SdpSolution) -> dict[str, float]:
         and the largest growth; ``interior_decisions``, ``within_bracket_share`` and
         ``median_gap_eur_mwh`` from :func:`first_order_check` (median of
         ``|p_t - delta w_{t+1}(S')|`` with centred water values); ``max_rise_week`` and
-        ``max_rise_filling_pct``: where the largest rise is; ``min_water_value_eur_mwh``: with
+        ``max_rise_filling_pct``: where the largest rise is; ``rising_max_filling_pct``: the
+        highest storage level of any rise beyond the resolution (NaN if none);
+        ``min_water_value_eur_mwh``: with
         spill as an option, no MWh is worth less than ``-c_sp``.
     """
     resolution = grid_resolution_eur_mwh(solution.problem)
     rise = np.diff(solution.water_value_eur_mwh, axis=1)
     week, level = np.unravel_index(int(rise.argmax()), rise.shape)
+    rising = rise > resolution
     s = solution.problem.storage_gwh
     check = first_order_check(solution)
     interior = check["interior"]
@@ -446,13 +449,22 @@ def checks(solution: SdpSolution) -> dict[str, float]:
     within = (price >= check["lower"][interior]) & (price <= check["upper"][interior])
     return {
         "resolution_eur_mwh": resolution,
-        "rising_cells": float((rise > resolution).sum()),
+        "rising_cells": float(rising.sum()),
         "max_rise_eur_mwh": float(rise.max()),
         "interior_decisions": float(interior.sum()),
         "within_bracket_share": float(within.mean()) if interior.any() else float("nan"),
-        "median_gap_eur_mwh": float(np.median(np.abs(price - check["centred"][interior]))),
+        "median_gap_eur_mwh": (
+            float(np.median(np.abs(price - check["centred"][interior])))
+            if interior.any()
+            else float("nan")
+        ),
         "max_rise_week": float(week + 1),
         "max_rise_filling_pct": float(100 * s[level + 1] / s[-1]),
+        "rising_max_filling_pct": (
+            float(100 * s[np.nonzero(rising)[1].max() + 1] / s[-1])
+            if rising.any()
+            else float("nan")
+        ),
         "min_water_value_eur_mwh": float(solution.water_value_eur_mwh.min()),
     }
 
@@ -636,6 +648,10 @@ def build_problem(
     n_storage_points: int | None = None,
     de_price_eur_mwh: np.ndarray | None = None,
     curve: PriceCurve | None = None,
+    residual_demand_gwh: np.ndarray | None = None,
+    inflow_years: Sequence[int] | None = None,
+    table: pd.DataFrame | None = None,
+    inflow: InflowResult | None = None,
 ) -> SdpProblem:
     """Assemble the SDP inputs from the weekly dataset and the configuration.
 
@@ -659,22 +675,38 @@ def build_problem(
         German price per stage ``(52,)`` [EUR/MWh]; the configured profile when None.
     curve : PriceCurve or None
         Price curve; the base model fitted on all of ``weekly`` when None.
+    residual_demand_gwh : numpy.ndarray or None
+        ``D_t`` per stage ``(52,)`` [GWh]; the mean of each ISO week over the years when None.
+    inflow_years : sequence of int or None
+        ISO years used as inflow scenarios; all years of the period when None.
+    table, inflow : pandas.DataFrame, InflowResult or None
+        The price table and the inflow of ``weekly``, computed when None (pass them to
+        build several problems from the same data).
 
     Returns
     -------
     SdpProblem
     """
     pm, res, sdp = cfg.price_model, cfg.reservoir, cfg.sdp
-    table = price_table(weekly, pm.seasons)
+    if table is None:
+        table = price_table(weekly, pm.seasons)
     if curve is None:
         curve = fit_curve(table, base_spec(cfg), pm.hac_maxlags)
     if de_price_eur_mwh is None:
         de_price_eur_mwh = base_de_price_profile(cfg, table)
     stage = curve.stage_curve(de_price_eur_mwh)
-    inflow = build_inflow(cfg, weekly)
+    if inflow is None:
+        inflow = build_inflow(cfg, weekly)
     scenarios = inflow.scenarios  # (J, 52)
+    if inflow_years is not None:
+        absent = sorted(set(inflow_years) - set(scenarios.index))
+        if absent:
+            raise SdpError(f"no inflow scenario for the years {absent}")
+        scenarios = scenarios.loc[sorted(inflow_years)]
     weeks = range(1, MODEL_WEEKS_PER_YEAR + 1)
-    demand = table.groupby("iso_week")["residual_demand_stage_gwh"].mean().reindex(weeks)
+    if residual_demand_gwh is None:
+        demand = table.groupby("iso_week")["residual_demand_stage_gwh"].mean().reindex(weeks)
+        residual_demand_gwh = demand.to_numpy()
     minimum = release_min(
         table["hydro_stage_gwh"],
         inflow.weekly["inflow_stage_gwh"],
@@ -688,7 +720,7 @@ def build_problem(
         storage_gwh=np.linspace(0.0, capacity_gwh(cfg, weekly), points),
         inflow_gwh=scenarios.to_numpy().T,
         probability=np.full(len(scenarios), 1.0 / len(scenarios)),
-        residual_demand_gwh=demand.to_numpy(),
+        residual_demand_gwh=residual_demand_gwh,
         release_min_gwh=minimum,
         release_max_gwh=np.full(MODEL_WEEKS_PER_YEAR, release_max),
         intercept_eur_mwh=stage.intercept_eur_mwh,

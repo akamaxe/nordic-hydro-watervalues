@@ -224,6 +224,47 @@ def solve(config: ConfigOption = None) -> None:
 
 
 @app.command()
+def simulate(config: ConfigOption = None) -> None:
+    """Backtest every year and run the scenarios from weekly_se.csv (into outputs/)."""
+    from watervalues.config import PROJECT_ROOT
+    from watervalues.data.build import load_weekly
+    from watervalues.inflow import InflowError
+    from watervalues.price import PriceError
+    from watervalues.sdp import SdpError
+    from watervalues.simulate import SimulationError, run_simulations, write_outputs
+
+    cfg = load_config(config)
+    weekly = load_weekly(PROJECT_ROOT / cfg.data.weekly_csv)
+    try:
+        result = run_simulations(cfg, weekly)
+    except (InflowError, PriceError, SdpError, SimulationError) as exc:
+        typer.echo(f"Simulation stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    for line in result.report:
+        typer.echo(line)
+    write_outputs(cfg, result)
+    typer.echo(f"\nWrote the backtest, its metrics, the scenarios and {cfg.simulation.report}")
+
+
+@app.command()
+def figures(config: ConfigOption = None) -> None:
+    """Draw the README figures from outputs/ into reports/figures/."""
+    from watervalues.figures import FiguresError, make_figures
+    from watervalues.inflow import InflowError
+    from watervalues.price import PriceError
+    from watervalues.sdp import SdpError
+
+    cfg = load_config(config)
+    try:
+        written = make_figures(cfg)
+    except (FiguresError, InflowError, PriceError, SdpError) as exc:
+        typer.echo(f"Figures stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    for path in written:
+        typer.echo(f"Wrote {path.name}")
+
+
+@app.command()
 def notebooks() -> None:
     """Execute every notebook in notebooks/ in order, in place, so outputs are up to date."""
     import nbformat

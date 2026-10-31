@@ -103,12 +103,24 @@ class SimulationConfig(_Section):
     """Forward simulation settings."""
 
     decision_step_gwh: float = Field(gt=0)
+    backtest_csv: Path
+    metrics_csv: Path
+    de_price_csv: Path
+    dry_wet_csv: Path
+    checks_csv: Path
+    report: Path
 
 
 class ScenariosConfig(_Section):
     """Scenario definitions."""
 
     de_price_levels_eur_mwh: tuple[float, ...]
+
+
+class FiguresConfig(_Section):
+    """Where `watervalues figures` writes the README figures."""
+
+    dir: Path
 
 
 class InflowConfig(_Section):
@@ -276,6 +288,7 @@ class AppConfig(_Section):
     sdp: SdpConfig
     simulation: SimulationConfig
     scenarios: ScenariosConfig
+    figures: FiguresConfig
     inflow: InflowConfig
     data: DataConfig
 
