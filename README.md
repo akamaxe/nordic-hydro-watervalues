@@ -98,7 +98,7 @@ The full formulation is in [reports/methodology.md](reports/methodology.md). The
 
 ## Data
 
-Source: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu). The repository holds weekly aggregates computed from its series, which are not on ENTSO-E's list of data for free re-use. Energiföretagen's weekly statistics are used only for validation and are not redistributed. See [data/README.md](data/README.md) for provenance, re-use terms, processing rules and known gaps.
+Source: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu). The committed weekly dataset is derived from its series and remains subject to the platform's terms of use. Energiföretagen's weekly statistics are used only for validation and are not redistributed. See [data/README.md](data/README.md) for provenance, re-use terms, processing rules and known gaps.
 
 ## License
 
