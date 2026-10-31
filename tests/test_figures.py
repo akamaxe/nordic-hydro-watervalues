@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 from watervalues.cli import app
 from watervalues.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
 from watervalues.data.build import load_weekly
+from watervalues.findings import END, START, load_numbers, readme_block, render
 from watervalues.simulate import run_simulations, write_outputs
 
 
@@ -21,6 +22,8 @@ def _config(tmp_path) -> str:
         raw["simulation"][name] = str(tmp_path / f"{name}.csv")
     raw["simulation"]["report"] = str(tmp_path / "simulate_report.txt")
     raw["figures"]["dir"] = str(tmp_path / "figures")
+    raw["findings"]["numbers_json"] = str(tmp_path / "key_numbers.json")
+    raw["findings"]["readme"] = str(tmp_path / "README.md")
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     return str(path)
@@ -53,3 +56,11 @@ def test_figures_are_drawn_from_the_outputs(tmp_path) -> None:
         "water_values.png",
     ]
     assert all((tmp_path / "figures" / name).stat().st_size > 10_000 for name in pngs)
+    # The key findings of a README are written from the same outputs.
+    (tmp_path / "README.md").write_text(f"# x\n{START}\n{END}\n", encoding="utf-8")
+    result = runner.invoke(app, ["findings", "--config", config])
+    assert result.exit_code == 0, result.output
+    numbers = load_numbers(tmp_path / "key_numbers.json")
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert readme_block(readme) == render(numbers)
+    assert numbers["dry_year"] != numbers["wet_year"]

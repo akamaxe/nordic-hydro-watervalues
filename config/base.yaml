@@ -73,6 +73,12 @@ scenarios:
 figures:
   dir: reports/figures         # PNGs for the README, written by `watervalues figures`
 
+findings:                     # the README's key numbers, written by `watervalues findings`
+  numbers_json: reports/key_numbers.json
+  readme: README.md
+  scarce_point: [44, 10]      # ISO week and storage [%] quoted for scarce water
+  full_point: [16, 90]        # and for a full reservoir before the spring flood
+
 inflow:                       # I = storage_end - storage + hydro (spill not observed: assumed 0)
   # Negative weekly inflow down to -negative_noise_gwh is storage-reporting noise: it is clipped
   # to 0 and listed. About twice the 76 GWh/week winter RMSE of the implied inflow against
