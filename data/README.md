@@ -56,10 +56,20 @@ the notebooks.
 
 ## Licence and attribution
 
-Source of all series: ENTSO-E Transparency Platform. The platform's terms of use require
-citing it as the source and not implying ENTSO-E's endorsement. Day-ahead prices originate from
-the power exchanges; the ENTSO-E list of freely re-usable data must be checked before this
-repository is made public.
+Source of all series: ENTSO-E Transparency Platform. Its
+[terms of use](https://transparencyplatform.zendesk.com/hc/en-us/articles/40921911218961-Legal-Terms-and-Conditions)
+(version approved on 29 March 2023, clause 3.1) require citing the platform as the source of
+publication, not implying ENTSO-E's endorsement, and respecting any copyright or related right of
+the primary owner of the data. Where a re-use risks prejudicing such a right, the owner's prior
+agreement is needed.
+
+ENTSO-E's list of data available for free re-use under CC BY 4.0 (version of 18 October 2023, on
+the same page) does not include the four series used here: actual total load (6.1.A), day-ahead
+prices (12.1.D), actual generation per production type (16.1.B&C) and the filling rate of
+reservoirs (16.1.D). The day-ahead prices originate from the power exchanges. This repository
+commits only weekly aggregates of these series (`processed/weekly_se.csv`) and results derived
+from them; the raw cache in `raw/` is never committed. Anyone re-using the weekly dataset should
+check the current terms and list first.
 
 The Energiföretagen workbooks (source: Energiföretagen Sverige, *Veckostatistik*) are not
 redistributed: only statistics derived from them are committed.

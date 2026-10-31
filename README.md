@@ -12,6 +12,8 @@ The water value is what one more MWh in the reservoir is worth: the future cost 
 
 ## Key findings
 
+`watervalues findings` writes these numbers from the model outputs.
+
 <!-- key-findings:start -->
 - Water is worth most when the reservoir is low before the winter: for example about 102 EUR/MWh in week 44 at 10% storage, against 2 EUR/MWh in week 16 with a 90% full reservoir just before the spring flood.
 - The Swedish price follows the German price almost one for one at balanced trade (pass-through 1.01), and the discount that exports buy grows with the German price. At the average net import the Swedish price moves 0.66 EUR/MWh per EUR/MWh in Germany. Letting the price slope scale with the German price cuts the out-of-sample price error from 21.4 to 16.7 EUR/MWh.
@@ -94,14 +96,10 @@ The full formulation is in [reports/methodology.md](reports/methodology.md). The
 - Residual demand and the German price are fixed inside the water value model, and the backtest knows both in advance.
 - Spill is not observed, so inflows in wet weeks are underestimated.
 
-## How this was built
-
-Developed with Claude Code as an AI pair programmer. Modelling decisions, validation and review are my own. Automated tests check the model's properties, and the key numbers in this README are written by code from the model outputs.
-
 ## Data
 
-Source: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu). Energiföretagen's weekly statistics are used only for validation and are not redistributed. See [data/README.md](data/README.md) for provenance, processing rules and known gaps.
+Source: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu). The repository holds weekly aggregates computed from its series, which are not on ENTSO-E's list of data for free re-use. Energiföretagen's weekly statistics are used only for validation and are not redistributed. See [data/README.md](data/README.md) for provenance, re-use terms, processing rules and known gaps.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+The code is MIT-licensed (see [LICENSE](LICENSE)); the data keep the terms of their sources (see [data/README.md](data/README.md)).
