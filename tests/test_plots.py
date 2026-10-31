@@ -168,3 +168,36 @@ def test_stage_slopes_draw_one_line_per_profile() -> None:
     )
     assert len(ax.figure.axes) == 1
     plt.close("all")
+
+
+@pytest.fixture
+def water_values() -> tuple[np.ndarray, np.ndarray]:
+    storage = np.linspace(0.0, 30_000.0, 21)
+    weeks = np.arange(1, 53)[:, None]
+    return 100 - 0.002 * storage[None, :] + 10 * np.sin(weeks / 8), storage
+
+
+def test_water_value_heatmap_draws_the_storage_paths(water_values, weekly) -> None:
+    w, storage = water_values
+    ax = plots.water_value_heatmap(w, storage, weekly)
+    paths = [line for line in ax.get_lines() if line.get_color() == "white"]
+    assert len(paths) == weekly["iso_year"].nunique()
+    np.testing.assert_allclose(
+        paths[0].get_ydata(), 100 * weekly.loc[weekly["iso_year"] == 2019, "storage_gwh"] / 30_000.0
+    )
+    assert len(ax.figure.axes) == 2  # the heatmap and its colour bar
+    plt.close("all")
+
+
+def test_water_value_curves_and_convergence(water_values) -> None:
+    w, storage = water_values
+    ax = plots.water_value_curves(w, storage, [2, 16, 30, 44])
+    lines = {line.get_label(): line for line in ax.get_lines()}
+    np.testing.assert_allclose(lines["week 16"].get_ydata(), w[15])
+    with pytest.raises(ValueError, match="at most"):
+        plots.water_value_curves(w, storage, list(range(1, 10)))
+    ax = plots.convergence([50.0, 5.0, 0.5, 0.04], 0.05)
+    assert ax.get_yscale() == "log"
+    ax = plots.grid_comparison({"K = 21": (100 * storage / storage[-1], w[0])})
+    assert ax.get_legend() is not None
+    plt.close("all")

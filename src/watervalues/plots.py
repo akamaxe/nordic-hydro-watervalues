@@ -43,6 +43,7 @@ LINE_WIDTH = 1.6
 CONTEXT_WIDTH = 0.9
 MARKER_AREA = 14  # scatter markers [pt^2]
 BOX_WIDTH = 0.35  # width of each box in a pair, in units of the category spacing
+HEATMAP_CAP_PERCENTILE = 99  # the heatmap's colour scale ends here (empty storage is extreme)
 
 
 def use_style() -> None:
@@ -567,4 +568,164 @@ def stage_slopes(curves: Mapping[str, StageCurve], ax: Axes | None = None) -> Ax
     ax.set_xlabel("ISO week (model stage)")
     ax.set_ylabel("Price slope b_t [EUR/MWh per GWh/week]")
     ax.legend(loc="upper left", ncols=len(curves))
+    return ax
+
+
+def water_value_heatmap(
+    water_value_eur_mwh: np.ndarray,
+    storage_gwh: np.ndarray,
+    weekly: pd.DataFrame | None = None,
+    ax: Axes | None = None,
+) -> Axes:
+    """Water value by ISO week and storage level, with the historical storage paths on top.
+
+    Parameters
+    ----------
+    water_value_eur_mwh : numpy.ndarray
+        Water values ``(52, K)`` [EUR/MWh].
+    storage_gwh : numpy.ndarray
+        Storage grid ``(K,)`` [GWh]; its last point is 100 %.
+    weekly : pandas.DataFrame or None
+        Weekly dataset with ``iso_year``, ``iso_week`` and ``storage_gwh`` [GWh]: each year's
+        storage at the start of the week is drawn as a thin line.
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax, size=(9, 5))
+    capacity = storage_gwh[-1]
+    weeks = np.arange(1, water_value_eur_mwh.shape[0] + 1)
+    mesh = ax.pcolormesh(
+        weeks,
+        100 * storage_gwh / capacity,
+        water_value_eur_mwh.T,
+        shading="nearest",
+        cmap="viridis",
+        vmax=np.percentile(water_value_eur_mwh, HEATMAP_CAP_PERCENTILE),
+        rasterized=True,
+    )
+    bar = ax.figure.colorbar(mesh, ax=ax, pad=0.02, extend="max")
+    bar.set_label(
+        f"Water value [EUR/MWh] (scale capped at percentile {HEATMAP_CAP_PERCENTILE})",
+        color=INK_SECONDARY,
+    )
+    bar.outline.set_visible(False)
+    if weekly is not None:
+        drawn = False
+        for _, group in weekly.groupby("iso_year"):
+            ax.plot(
+                group["iso_week"],
+                100 * group["storage_gwh"] / capacity,
+                color="white",
+                linewidth=CONTEXT_WIDTH,
+                alpha=0.75,
+                label=None if drawn else "observed storage, one line per year",
+            )
+            drawn = True
+        ax.legend(loc="lower left", labelcolor="white")
+    ax.grid(False)
+    ax.set_xlim(weeks[0] - 0.5, weeks[-1] + 0.5)
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("ISO week (model stage)")
+    ax.set_ylabel(f"Storage at start of week [% of {capacity / 1e3:.1f} TWh]")
+    return ax
+
+
+def water_value_curves(
+    water_value_eur_mwh: np.ndarray,
+    storage_gwh: np.ndarray,
+    weeks: Sequence[int],
+    ax: Axes | None = None,
+) -> Axes:
+    """Water value against storage for selected ISO weeks.
+
+    Parameters
+    ----------
+    water_value_eur_mwh : numpy.ndarray
+        Water values ``(52, K)`` [EUR/MWh].
+    storage_gwh : numpy.ndarray
+        Storage grid ``(K,)`` [GWh].
+    weeks : sequence of int
+        ISO weeks to draw (at most eight).
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    if len(weeks) > len(SERIES):
+        raise ValueError(f"at most {len(SERIES)} weeks")
+    ax = _axes(ax, size=(7, 4.5))
+    filling = 100 * storage_gwh / storage_gwh[-1]
+    for week, colour in zip(weeks, SERIES, strict=False):
+        ax.plot(filling, water_value_eur_mwh[week - 1], color=colour, label=f"week {week}")
+    ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Storage at start of week [% of capacity]")
+    ax.set_ylabel("Water value [EUR/MWh]")
+    ax.legend(loc="upper right")
+    return ax
+
+
+def convergence(
+    history_eur_mwh: Sequence[float], tol_eur_mwh: float, ax: Axes | None = None
+) -> Axes:
+    """Largest change of any water value between consecutive yearly cycles (log scale).
+
+    Parameters
+    ----------
+    history_eur_mwh : sequence of float
+        Change after cycles 2, 3, ... [EUR/MWh].
+    tol_eur_mwh : float
+        Stopping tolerance [EUR/MWh], drawn as a dashed line.
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax, size=(7, 4))
+    cycles = np.arange(2, len(history_eur_mwh) + 2)
+    ax.semilogy(cycles, history_eur_mwh, marker="o", color=SERIES[0], label="largest change")
+    ax.axhline(tol_eur_mwh, color=INK_SECONDARY, linestyle="--", linewidth=1, label="tolerance")
+    ax.set_xticks(cycles)
+    ax.set_xlabel("Cycle (one pass over the 52 weeks)")
+    ax.set_ylabel("Largest water value change [EUR/MWh]")
+    ax.legend(loc="upper right")
+    return ax
+
+
+def grid_comparison(
+    curves: Mapping[str, tuple[np.ndarray, np.ndarray]], ax: Axes | None = None
+) -> Axes:
+    """Water value curves of the same week computed on different storage grids.
+
+    Parameters
+    ----------
+    curves : mapping of str to (numpy.ndarray, numpy.ndarray)
+        Label to ``(filling [%], water value [EUR/MWh])`` (at most eight).
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    if len(curves) > len(SERIES):
+        raise ValueError(f"at most {len(SERIES)} curves")
+    ax = _axes(ax, size=(7, 4.5))
+    styles = ("-", "--", ":", "-.")
+    for i, ((label, (filling, value)), colour) in enumerate(
+        zip(curves.items(), SERIES, strict=False)
+    ):
+        ax.plot(filling, value, color=colour, linestyle=styles[i % len(styles)], label=label)
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Storage at start of week [% of capacity]")
+    ax.set_ylabel("Water value [EUR/MWh]")
+    ax.legend(loc="upper right")
     return ax
