@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from watervalues.data.schema import KNOWN_PSR_TYPES
+from watervalues.units import MODEL_WEEKS_PER_YEAR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "base.yaml"
@@ -45,10 +47,37 @@ class ReservoirConfig(_Section):
 
 
 class PriceModelConfig(_Section):
-    """Options of the reduced-form price curve regression."""
+    """Reduced-form price curve: the base model, the variants compared with it, and outputs."""
 
+    slope_form: Literal["constant", "proportional"]  # slope beta, or kappa * German price
     seasonal_dummies: bool
-    exclude_years: tuple[int, ...] = ()
+    exclude_years: tuple[int, ...] = ()  # base sample: all years, or without crisis_years
+    crisis_years: tuple[int, ...]
+    seasons: dict[str, int]  # season name -> first ISO week; the first is the reference
+    hac_maxlags: int = Field(ge=0)  # Newey-West lags of the standard errors [weeks]
+    hac_lag_sensitivity: tuple[int, ...]
+    residual_acf_lags: tuple[int, ...]
+    selection_tolerance_eur_mwh: float = Field(ge=0)
+    weekly_csv: Path
+    variants_csv: Path
+    curve_json: Path
+    report: Path
+
+    @model_validator(mode="after")
+    def _check(self) -> PriceModelConfig:
+        weeks = list(self.seasons.values())
+        increasing = all(later > earlier for earlier, later in pairwise(weeks))
+        if len(weeks) <= 1 or weeks[0] != 1 or not increasing or weeks[-1] > MODEL_WEEKS_PER_YEAR:
+            raise ValueError(
+                "price_model.seasons must give at least two first ISO weeks, starting at 1 and "
+                f"increasing up to {MODEL_WEEKS_PER_YEAR}: {self.seasons}"
+            )
+        if self.exclude_years and sorted(self.exclude_years) != sorted(self.crisis_years):
+            raise ValueError(
+                "price_model.exclude_years must be empty or equal to crisis_years, so that the "
+                f"base model is one of the compared variants: {self.exclude_years}"
+            )
+        return self
 
 
 class SdpConfig(_Section):

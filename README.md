@@ -22,6 +22,9 @@ uv run pytest
    timestamp convention was verified.
 2. [Inflow reconstruction](notebooks/02_inflow_reconstruction.ipynb): weekly inflows from the
    reservoir energy balance, dry and wet years, and the inflow scenarios of the model.
+3. [Price curve](notebooks/03_price_model.ipynb): the reduced-form curve linking the Swedish
+   price to net import and the German price, eight variants compared out of sample, and the
+   weekly cost function of the water value model.
 
 ## Data
 

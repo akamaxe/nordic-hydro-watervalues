@@ -27,6 +27,7 @@ def test_cli_help_lists_commands() -> None:
     assert result.exit_code == 0, result.output
     assert "info" in result.output
     assert "inflow" in result.output
+    assert "price" in result.output
 
 
 def test_cli_info_prints_config() -> None:

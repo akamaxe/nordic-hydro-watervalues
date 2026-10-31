@@ -64,3 +64,33 @@ def test_inflow_noise_band_must_be_positive(raw: dict) -> None:
     bad["inflow"]["negative_noise_gwh"] = -1
     with pytest.raises(ValidationError, match="negative_noise_gwh"):
         AppConfig.model_validate(bad)
+
+
+@pytest.mark.parametrize(
+    "seasons",
+    [
+        {"Q1": 2, "Q2": 14},  # the first season must start in week 1
+        {"Q1": 1, "Q2": 27, "Q3": 14},  # first weeks must increase
+        {"Q1": 1, "Q2": 53},  # beyond the 52 model weeks
+        {"Q1": 1},  # one season leaves nothing to compare
+    ],
+)
+def test_price_seasons_start_at_week_one_and_increase(raw: dict, seasons: dict) -> None:
+    bad = copy.deepcopy(raw)
+    bad["price_model"]["seasons"] = seasons
+    with pytest.raises(ValidationError, match="seasons"):
+        AppConfig.model_validate(bad)
+
+
+def test_price_base_sample_is_all_years_or_without_the_crisis(raw: dict) -> None:
+    bad = copy.deepcopy(raw)
+    bad["price_model"]["exclude_years"] = [2022]
+    with pytest.raises(ValidationError, match="exclude_years"):
+        AppConfig.model_validate(bad)
+
+
+def test_price_slope_form_is_known(raw: dict) -> None:
+    bad = copy.deepcopy(raw)
+    bad["price_model"]["slope_form"] = "quadratic"
+    with pytest.raises(ValidationError, match="slope_form"):
+        AppConfig.model_validate(bad)
