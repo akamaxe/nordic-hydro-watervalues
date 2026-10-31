@@ -27,6 +27,9 @@ uv run pytest
    weekly cost function of the water value model.
 4. [Water values](notebooks/04_water_values.ipynb): the stochastic dynamic programme, the
    water value of every week and storage level, and checks against theory and the grid.
+5. [Backtest and scenarios](notebooks/05_backtest_and_scenarios.ipynb): each year of
+   2015–2025 simulated with water values that have not seen it, the continental price
+   scenarios, and the driest against the wettest year.
 
 ## Data
 
