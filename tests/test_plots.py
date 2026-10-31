@@ -201,3 +201,65 @@ def test_water_value_curves_and_convergence(water_values) -> None:
     ax = plots.grid_comparison({"K = 21": (100 * storage / storage[-1], w[0])})
     assert ax.get_legend() is not None
     plt.close("all")
+
+
+@pytest.fixture
+def backtest() -> pd.DataFrame:
+    rows = []
+    for year in (2019, 2020, 2021):
+        cal = week_calendar(year, year)
+        rows.append(
+            cal.assign(
+                storage_end_gwh=np.linspace(20_000, 10_000, len(cal)),
+                observed_storage_end_gwh=np.linspace(21_000, 12_000, len(cal)),
+                price_eur_mwh=40.0,
+                observed_price_eur_mwh=np.linspace(30.0, 50.0, len(cal)),
+            )
+        )
+    return pd.concat(rows, ignore_index=True)
+
+
+def test_backtest_figures(backtest) -> None:
+    fig = plots.backtest_storage(backtest, 30_000.0)
+    visible = [ax for ax in fig.axes if ax.get_visible()]
+    assert len(visible) == 3  # one panel per year; the spare panels of the grid are hidden
+    titles = [ax.get_title("left") or ax.get_title() for ax in visible]  # the style aligns left
+    assert titles == ["2019", "2020", "2021"]
+    ax = plots.backtest_prices(backtest)
+    labels = {line.get_label() for line in ax.get_lines()} - {"_child2"}  # minus the zero line
+    assert {label for label in labels if not label.startswith("_")} == {"observed", "simulated"}
+    plt.close("all")
+
+
+def test_scenario_figures() -> None:
+    de_price = pd.DataFrame(
+        {
+            "water_value_mean_eur_mwh": [30.0, 48.0, 71.0],
+            "water_value_min_eur_mwh": [29.0, 46.0, 68.0],
+            "water_value_max_eur_mwh": [32.0, 50.0, 73.0],
+        },
+        index=pd.Index([50.0, 80.0, 120.0], name="de_price_level_eur_mwh"),
+    )
+    ax = plots.de_price_scenario(de_price)
+    mean = next(line for line in ax.get_lines() if line.get_label() == "mean over the year")
+    np.testing.assert_allclose(mean.get_ydata(), de_price["water_value_mean_eur_mwh"])
+    weeks = np.arange(1, 53)
+    traces = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "case": case,
+                    "iso_year": year,
+                    "iso_week": weeks,
+                    "storage_end_gwh": 15_000.0,
+                    "price_eur_mwh": price,
+                }
+            )
+            for case, year, price in (("dry", 2016, 52.0), ("wet", 2020, 42.0))
+        ]
+    )
+    fig = plots.dry_and_wet(traces, 30_000.0)
+    assert len(fig.axes) == 2  # storage and price, one y-axis each
+    labels = [line.get_label() for line in fig.axes[0].get_lines()]
+    assert labels == ["wettest year (2020)", "driest year (2016)"]
+    plt.close("all")

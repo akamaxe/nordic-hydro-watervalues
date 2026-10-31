@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from cycler import cycler
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -43,6 +44,7 @@ LINE_WIDTH = 1.6
 CONTEXT_WIDTH = 0.9
 MARKER_AREA = 14  # scatter markers [pt^2]
 BOX_WIDTH = 0.35  # width of each box in a pair, in units of the category spacing
+BACKTEST_COLUMNS = 4  # panels per row in the backtest figure
 HEATMAP_CAP_PERCENTILE = 99  # the heatmap's colour scale ends here (empty storage is extreme)
 
 
@@ -729,3 +731,150 @@ def grid_comparison(
     ax.set_ylabel("Water value [EUR/MWh]")
     ax.legend(loc="upper right")
     return ax
+
+
+def backtest_storage(backtest: pd.DataFrame, capacity_gwh: float) -> Figure:
+    """Plot simulated and observed end-of-week storage, one panel per backtest year.
+
+    Parameters
+    ----------
+    backtest : pandas.DataFrame
+        Output of :func:`watervalues.simulate.backtest_year` for several years, with
+        ``iso_year``, ``iso_week``, ``storage_end_gwh`` and ``observed_storage_end_gwh`` [GWh].
+    capacity_gwh : float
+        Storage capacity used as 100 % [GWh].
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    years = sorted(backtest["iso_year"].unique())
+    columns = BACKTEST_COLUMNS
+    rows = -(-len(years) // columns)
+    fig, axes = plt.subplots(rows, columns, figsize=(11, 2.3 * rows), sharex=True, sharey=True)
+    flat = np.atleast_1d(axes).ravel()
+    for ax, year in zip(flat, years, strict=False):
+        group = backtest[backtest["iso_year"] == year]
+        ax.plot(
+            group["iso_week"],
+            100 * group["observed_storage_end_gwh"] / capacity_gwh,
+            color=INK,
+            linewidth=1.2,
+            label="observed",
+        )
+        ax.plot(
+            group["iso_week"],
+            100 * group["storage_end_gwh"] / capacity_gwh,
+            color=SERIES[0],
+            linewidth=1.2,
+            label="simulated",
+        )
+        ax.set_title(str(year), fontsize=10)
+        ax.set_xlim(1, 52)
+        ax.set_ylim(0, 100)
+    for ax in flat[len(years) :]:
+        ax.set_visible(False)
+    flat[0].legend(loc="lower left", fontsize=8)
+    fig.supxlabel("ISO week", color=INK_SECONDARY)
+    fig.supylabel("Storage at end of week [% of capacity]", color=INK_SECONDARY)
+    return fig
+
+
+def backtest_prices(backtest: pd.DataFrame, ax: Axes | None = None) -> Axes:
+    """Plot the simulated and observed weekly Swedish price of the backtest [EUR/MWh].
+
+    Parameters
+    ----------
+    backtest : pandas.DataFrame
+        With ``week_start``, ``price_eur_mwh`` and ``observed_price_eur_mwh`` [EUR/MWh].
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax)
+    x = pd.DatetimeIndex(backtest["week_start"])
+    ax.plot(x, backtest["observed_price_eur_mwh"], color=SERIES[0], label="observed")
+    ax.plot(x, backtest["price_eur_mwh"], color=SERIES[1], linewidth=1.1, label="simulated")
+    ax.axhline(0, color=AXIS, linewidth=0.8, zorder=1)
+    ax.set_ylabel("Swedish price [EUR/MWh]")
+    ax.legend(loc="upper left", ncols=2)
+    return ax
+
+
+def de_price_scenario(de_price: pd.DataFrame, ax: Axes | None = None) -> Axes:
+    """Water value along the typical storage path against the annual German price level.
+
+    Parameters
+    ----------
+    de_price : pandas.DataFrame
+        Output of :func:`watervalues.simulate.de_price_scenarios`, indexed by the level
+        [EUR/MWh], with ``water_value_mean_eur_mwh``, ``water_value_min_eur_mwh`` and
+        ``water_value_max_eur_mwh`` [EUR/MWh].
+    ax : matplotlib Axes or None
+        Axes to draw on; a new figure is created when None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
+    ax = _axes(ax, size=(7, 4.5))
+    levels = de_price.index.to_numpy(dtype=float)
+    ax.fill_between(
+        levels,
+        de_price["water_value_min_eur_mwh"],
+        de_price["water_value_max_eur_mwh"],
+        color=CONTEXT,
+        alpha=0.6,
+        linewidth=0,
+        label="range over the weeks",
+    )
+    ax.plot(
+        levels,
+        de_price["water_value_mean_eur_mwh"],
+        marker="o",
+        color=SERIES[0],
+        label="mean over the year",
+    )
+    ax.set_xlabel("Annual mean German price of the scenario [EUR/MWh]")
+    ax.set_ylabel("Water value at the typical storage [EUR/MWh]")
+    ax.set_ylim(bottom=0)
+    ax.legend(loc="upper left")
+    return ax
+
+
+def dry_and_wet(traces: pd.DataFrame, capacity_gwh: float) -> Figure:
+    """Storage and price over the driest and the wettest inflow year from the same start.
+
+    Parameters
+    ----------
+    traces : pandas.DataFrame
+        Output of :func:`watervalues.simulate.dry_and_wet_years`: ``case`` (``dry``/``wet``),
+        ``iso_year``, ``iso_week``, ``storage_end_gwh`` [GWh] and ``price_eur_mwh`` [EUR/MWh].
+    capacity_gwh : float
+        Storage capacity used as 100 % [GWh].
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    fig, (top, bottom) = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
+    for case, colour, name in (("wet", SERIES[0], "wettest"), ("dry", SERIES[1], "driest")):
+        group = traces[traces["case"] == case]
+        label = f"{name} year ({int(group['iso_year'].iloc[0])})"
+        top.plot(
+            group["iso_week"],
+            100 * group["storage_end_gwh"] / capacity_gwh,
+            color=colour,
+            label=label,
+        )
+        bottom.plot(group["iso_week"], group["price_eur_mwh"], color=colour, label=label)
+    top.set_ylim(0, 100)
+    top.set_ylabel("Storage at end of week [% of capacity]")
+    top.legend(loc="lower right")
+    bottom.set_xlim(1, 52)
+    bottom.set_xlabel("ISO week")
+    bottom.set_ylabel("Simulated price [EUR/MWh]")
+    return fig
