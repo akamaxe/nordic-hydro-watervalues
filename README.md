@@ -13,10 +13,10 @@ The water value is what one more MWh in the reservoir is worth: the future cost 
 ## Key findings
 
 <!-- key-findings:start -->
-- Water is worth most when the reservoir is low before the winter: about 102 EUR/MWh in week 44 at 10% storage, against 2 EUR/MWh in week 16 with a 90% full reservoir just before the spring flood.
+- Water is worth most when the reservoir is low before the winter: for example about 102 EUR/MWh in week 44 at 10% storage, against 2 EUR/MWh in week 16 with a 90% full reservoir just before the spring flood.
 - The Swedish price follows the German price almost one for one at balanced trade (pass-through 1.01), and the discount that exports buy grows with the German price. At the average net import the Swedish price moves 0.66 EUR/MWh per EUR/MWh in Germany. Letting the price slope scale with the German price cuts the out-of-sample price error from 21.4 to 16.7 EUR/MWh.
-- Each EUR/MWh on the continental price moves the Swedish water value by 0.57 EUR/MWh.
-- Replaying 2015-2025 with water values that knew each year's demand and German price but not its inflow, the storage error is 9.7% of the largest storage observed (RMSE), and the weekly price correlates 0.71 with the observed one (0.96 for annual means, 0.40 within years). The model releases more water than producers did, so its prices run 9.0 EUR/MWh low on average.
+- Along the typical storage path, each EUR/MWh on the continental price moves the Swedish water value by 0.57 EUR/MWh on average over the year; with a low reservoir in week 44 the response is 1.31 EUR/MWh.
+- Replaying 2015-2025 with water values that knew each year's demand and German price but not its inflow, the storage error is 9.7% of the largest storage observed (RMSE), and the weekly price correlates 0.71 with the observed one (0.96 for annual means, 0.40 within years). The simulated prices run 9.0 EUR/MWh low on average: 8.0 from releasing more water than the producers did, and 1.1 from the price curve at the observed net import.
 - From the same start, the driest year (2016) ends with 10.0 TWh in storage against 25.5 TWh for the wettest (2020), at a mean price 10.0 EUR/MWh higher.
 <!-- key-findings:end -->
 
@@ -58,9 +58,9 @@ flowchart LR
 ## Validation
 
 - **The reservoir data.** The timestamp convention of the reservoir series is checked against an Energiföretagen weekly report and against its weekly statistics for 2019–2025.
-- **The solver.** It reproduces a brute-force dynamic programme. Its water values fall with storage and never drop below minus the spill penalty, and the optimality condition (price = discounted water value) holds at every interior decision.
+- **The solver.** It reproduces a brute-force dynamic programme on small problems, including forced spill and negative prices. In the base case and the price scenarios, its water values are non-increasing in storage within the price resolution of the grid. In most backtest years they rise slightly at a nearly empty reservoir, the kink of the minimum-release rule, which no simulated decision reaches. No water value is below minus the spill penalty. The optimality condition (price = discounted water value) holds at every interior decision, within half a storage step.
 - **The price model.** It is chosen by leave-one-year-out error, and each backtest year uses a price curve and inflow scenarios that exclude it.
-- **The tests.** An offline test suite runs in CI on every push, including exact recovery on synthetic data and the mass balance of every simulated week.
+- **The tests.** An offline test suite runs in CI on every push to main and every pull request, including exact recovery on synthetic data and the mass balance of every simulated week.
 
 ## Reproduce
 
@@ -96,7 +96,7 @@ The full formulation is in [reports/methodology.md](reports/methodology.md). The
 
 ## How this was built
 
-Developed with Claude Code as an AI pair programmer. Modelling decisions, validation and review are my own; automated tests check every reported number.
+Developed with Claude Code as an AI pair programmer. Modelling decisions, validation and review are my own. Automated tests check the model's properties, and the key numbers in this README are written by code from the model outputs.
 
 ## Data
 

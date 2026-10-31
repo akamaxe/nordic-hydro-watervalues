@@ -44,6 +44,7 @@ from watervalues.sdp import (
     capacity_gwh,
     checks,
     solve,
+    water_value_at,
 )
 from watervalues.units import EUR_PER_KEUR, HOURS_PER_WEEK, MODEL_WEEKS_PER_YEAR, MWH_PER_GWH
 
@@ -386,7 +387,9 @@ def de_price_scenarios(
     tuple of (pandas.DataFrame, float, dict)
         Indexed by the level [EUR/MWh]: ``water_value_mean_eur_mwh`` (mean over the year of the
         water value at the mean observed storage of each week), its ``min`` and ``max`` over
-        the weeks, and ``price_mean_eur_mwh`` (mean of ``a_t``, the price at zero net import);
+        the weeks, ``water_value_scarce_eur_mwh`` (at ``findings.scarce_point``, a low
+        reservoir before the winter) and ``price_mean_eur_mwh`` (mean of ``a_t``, the price at
+        zero net import);
         the slope of the mean water value against the level [EUR/MWh per EUR/MWh]; and the
         solution of each level.
     """
@@ -401,10 +404,12 @@ def de_price_scenarios(
         problem = build_problem(cfg, weekly, de_price_eur_mwh=profile, table=table, inflow=inflow)
         solution = solve(problem, cfg.sdp.tol_eur_mwh, cfg.sdp.max_cycles)
         w = water_value_on_path(solution, path)
+        scarce_week, scarce_pct = cfg.findings.scarce_point
         rows[float(level)] = {
             "water_value_mean_eur_mwh": float(w.mean()),
             "water_value_min_eur_mwh": float(w.min()),
             "water_value_max_eur_mwh": float(w.max()),
+            "water_value_scarce_eur_mwh": water_value_at(solution, scarce_week, scarce_pct),
             "price_mean_eur_mwh": float(problem.intercept_eur_mwh.mean()),
         }
         solutions[float(level)] = solution

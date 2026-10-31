@@ -10,7 +10,7 @@ All series come from the ENTSO-E Transparency Platform for 2015–2025: Swedish 
 
 The Swedish price is the load-weighted average of the four zones. The German price is DE-AT-LU until 30 September 2018 and DE-LU after.
 
-The reservoir value published for week *w* is the storage at the end of that week. This was verified in three ways: against Energiföretagen's weekly report, against its weekly statistics for 2019–2025, and through the physics of winter weeks ([data/README.md](../data/README.md)). A one-week shift would pair the production of one week with the storage change of another and corrupt every inflow.
+The reservoir value published for week *w* is the storage at the end of that week. Two references verify this: Energiföretagen's weekly report, and its weekly statistics for 2019–2025. The physics of winter weeks also rules out the labels shifted by one week, though on its own it cannot rule out a weekly mean ([data/README.md](../data/README.md)). A one-week shift would pair the production of one week with the storage change of another and corrupt every inflow.
 
 ## 2. Inflow
 
@@ -68,14 +68,14 @@ $$S' = S + I_{t,j} - R - Sp, \qquad 0 \le S' \le S^{max}, \qquad \min(R^{min}_t,
 |---|---|---|
 | $D_t$ | mean residual demand of the week over the years | from the data |
 | $S^{max}$ | largest storage observed | from the data |
-| $R^{max}$ | installed capacity × 168 h × availability | 16,300 MW × 168 h × 0.85 |
+| $R^{max}$ | installed capacity × 168 h × availability | 16,300 MW (assumed; still to be checked against an official source) × 168 h × 0.85 |
 | $R^{min}_t$ | 5th percentile over the years of min(production, inflow) of the week | from the data |
 | $c^{sp}$ | spill penalty | 0.01 EUR/MWh |
 | $\delta$ | weekly discount factor | $1.05^{-1/52}$ |
 
 Inflow is known when the week's decision is made (hazard-decision) and independent between weeks.
 
-**The minimum release.** Forced production cannot exceed what flows in during the week, so $R^{min}_t$ is a low percentile of min(production, inflow), not of production alone. A floor on production would treat output that follows demand, as in winter, as a physical minimum. At low storage it would force water out at the week's price and make the water value rise with storage.
+**The minimum release.** Forced production cannot exceed what flows in during the week, so $R^{min}_t$ is a low percentile of min(production, inflow), not of production alone. A floor on production would treat output that follows demand, as in winter, as a physical minimum. At low storage it would force water out at the week's price and make the water value rise with storage. The inflow-capped floor removes most of that effect. A small rise remains at a nearly empty reservoir, from the kink of the rule itself.
 
 **Release and spill.** For the water let out, $X = R + Sp$, the cost is convex in $R$. It is smallest where the price falls to $-c^{sp}$, so the release stops there and the rest is spilled. While prices are positive this means spilling only above turbine capacity. The linear curve reaches negative prices before full release in many weeks, because it is extrapolated beyond the largest observed export.
 
@@ -93,20 +93,20 @@ which states that the price of the week equals the discounted water value of the
 - The year is repeated with the value of week 1 as the end value until no water value changes by more than 0.05 EUR/MWh between cycles. The level of $V$ keeps drifting after that; only its differences are used.
 
 **Checks.**
-- Water values are non-increasing in storage, within the price resolution of the grid.
+- In the base case and the price scenarios, water values are non-increasing in storage within the price resolution of the grid. In most backtest years they rise slightly at a nearly empty reservoir, at the kink of the minimum release; the simulated reservoir never gets that low (`outputs/simulate_report.txt` lists every case).
 - No water value is below $-c^{sp}$.
-- The optimality condition holds at every interior decision, within half a grid step.
-- The results barely change with 101 or 401 storage points.
+- The optimality condition holds at every interior decision, within half a grid step of the one-sided water values.
+- With 101 or 401 storage points instead of 201, the water values change by a small fraction of a EUR/MWh on average. The largest differences sit near an empty or a full reservoir (notebook 04).
 
 ## 5. Simulation, backtest and scenarios
 
-**Simulation.** Week by week, the release is chosen on a 10 GWh grid to minimise $C_t(D_t - R) + c^{sp} Sp + \delta\, V_{t+1}(S')$, with $V_{t+1}$ interpolated linearly in storage. The simulated price is $p_t = a_t + b_t (D_t - R_t)$.
+**Simulation.** Week by week, the release is chosen on a 10 GWh grid to minimise $C_t(D_t - R) + c^{sp} Sp + \delta\, V_{t+1}(S')$, with $V_{t+1}$ interpolated linearly in storage. Water is spilled only when the reservoir would overflow; since no water value is below $-c^{sp}$, spilling a reservoir that is not full is never strictly better. The simulated price is $p_t = a_t + b_t (D_t - R_t)$.
 
 **Backtest of year $y$.**
 - Start from the observed storage, with the observed inflow, residual demand and German price.
-- Solve the water values with that year's German price. This gives perfect foresight of the continental price, so the remaining uncertainty is hydrological.
-- Refit the price curve without year $y$, and leave $y$ out of the inflow scenarios.
-- Weeks without an observed residual demand or German price use the climatology and are left out of the price metrics.
+- Solve the water values with that year's residual demand and German price. This gives perfect foresight of both, so the remaining uncertainty is hydrological.
+- Refit the price curve without year $y$, and leave $y$ out of the inflow scenarios. The minimum release and $S^{max}$ still come from all years; that effect was checked to be negligible.
+- A week without an observed residual demand uses the mean of that week over the years, and a missing German price takes the base seasonal shape at the year's own level. These weeks, and the weeks with an imputed inflow, are left out of the price metrics. The folded week 52 of a 53-week year is left out of the storage error, because its observed end of week is a week later.
 - Metrics: the weekly price correlation, MAE and bias, and the RMSE of storage at the end of each week, in % of $S^{max}$.
 
 **Scenarios.**
@@ -120,4 +120,4 @@ which states that the price of the week equals the discounted water value of the
 - **The price curve.** It is linear, reduced-form and estimated by OLS. Hydro responds to the price, so net import is not exogenous. It has no scarcity premium at low storage and is extrapolated at large exports.
 - **Fixed demand and German price.** Residual demand and the German price are deterministic inside the water value model.
 - **Risk neutrality.** The model minimises expected cost.
-- **Foresight in the backtest.** It knows the German price in advance.
+- **Foresight in the backtest.** It knows each year's residual demand and German price in advance.

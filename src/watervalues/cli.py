@@ -268,13 +268,13 @@ def figures(config: ConfigOption = None) -> None:
 def findings(config: ConfigOption = None) -> None:
     """Write the README's key findings from outputs/ (and reports/key_numbers.json)."""
     from watervalues.findings import FindingsError, render, write_findings
-    from watervalues.inflow import InflowError
     from watervalues.price import PriceError
+    from watervalues.sdp import SdpError
 
     cfg = load_config(config)
     try:
         numbers = write_findings(cfg)
-    except (FindingsError, InflowError, PriceError) as exc:
+    except (FindingsError, PriceError, SdpError) as exc:
         typer.echo(f"Findings stopped: {exc}", err=True)
         raise typer.Exit(code=1) from None
     typer.echo(render(numbers))
